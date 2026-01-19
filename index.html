@@ -893,13 +893,22 @@
         }
 
         // ==================== FAILSAFE: Hide loader after 5 seconds ====================
+        // ==================== FAILSAFE & ERROR HANDLING ====================
+        // Global error handler to force open app if script crashes
+        window.onerror = function(msg, url, line) {
+            console.error('Global Error:', msg);
+            hideLoader();
+            return false;
+        };
+
+        // Force hide loader after 3 seconds no matter what
         setTimeout(() => {
             const loader = document.getElementById('loadingScreen');
-            if (loader && loader.style.display !== 'none') {
-                console.warn('⚠️ Failsafe: Force hiding loader after 5s');
+            if (loader && getComputedStyle(loader).opacity !== '0') {
+                console.warn('⚠️ Failsafe: Force hiding loader');
                 hideLoader();
             }
-        }, 5000);
+        }, 3000);
 
         // ==================== INITIALIZATION ====================
         async function init() {
