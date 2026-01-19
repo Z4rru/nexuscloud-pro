@@ -870,7 +870,15 @@
         let notifications = [];
 
         // ==================== INITIALIZATION ====================
-        async function init() {
+                async function init() {
+            const hideLoader = () => {
+                const loader = document.getElementById('loadingScreen');
+                if(loader) {
+                    loader.style.opacity = '0';
+                    setTimeout(() => { loader.style.display = 'none'; }, 300);
+                }
+            };
+            
             try {
                 // Check online status
                 updateOnlineStatus();
@@ -899,18 +907,13 @@
                 await tryAutoConnect();
                 
                 console.log('%c NexusCloud Pro 2026 ', 'background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; font-size: 20px; padding: 10px; border-radius: 5px;');
+                
+                // Hide loader on success
+                setTimeout(hideLoader, 500);
             } catch (error) {
                 console.error('Initialization error:', error);
-                showToast('Error', 'Failed to initialize app: ' + error.message, 'error');
-            } finally {
-                // FORCE hide loading screen regardless of success or error
-                setTimeout(() => {
-                    const loader = document.getElementById('loadingScreen');
-                    if(loader) {
-                        loader.style.opacity = '0';
-                        setTimeout(() => { loader.style.display = 'none'; }, 300);
-                    }
-                }, 800);
+                // Still hide loader on error
+                setTimeout(hideLoader, 500);
             }
         }
 
@@ -2414,6 +2417,8 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
         }
 
         // ==================== SETTINGS ====================
+    // ==================== SETTINGS ====================
+async function loadSettings() {
     const settings = await loadAllSettings();
     
     // Load cloud credentials into inputs
