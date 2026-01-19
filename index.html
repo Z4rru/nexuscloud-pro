@@ -2874,7 +2874,14 @@ function truncateTable(query) {
     
     return { message: `Table '${tableName}' truncated. ${count} row(s) removed.` };
 }
-
+// Register Service Worker for PWA support
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+            .then(reg => console.log('Service Worker registered'))
+            .catch(err => console.log('Service Worker failed:', err));
+    });
+}
 // Initialize
 document.addEventListener('DOMContentLoaded', init);
 </script></body> </html>
