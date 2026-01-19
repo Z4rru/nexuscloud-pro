@@ -874,7 +874,7 @@
         let selectedFiles = new Set();
         let currentView = 'grid';
         let contextMenuTarget = null;
-        let supabase = null;
+
         let currentProvider = 'local';
         let isOnline = navigator.onLine;
         let sqlHistory = [];
@@ -1130,7 +1130,7 @@
                         console.warn('Supabase not available');
                         return;
                     }
-                    supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+                                        supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
                     currentProvider = 'supabase';
                     var statusEl = document.getElementById('supabaseStatus');
                     var syncEl = document.getElementById('syncStatus');
@@ -1159,7 +1159,7 @@
             }
             
             try {
-                supabase = window.supabase.createClient(url, key);
+                                supabaseClient = window.supabase.createClient(url, key);
                 
                 await dbPut('settings', { key: 'supabaseUrl', value: url });
                 await dbPut('settings', { key: 'supabaseKey', value: key });
