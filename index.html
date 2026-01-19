@@ -1121,29 +1121,25 @@
         }
 
         // ==================== CLOUD PROVIDERS ====================
-        async function tryAutoConnect() {
+               async function tryAutoConnect() {
             if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
                 try {
-                    if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
-                        supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
-                        currentProvider = 'supabase';
-                        
-                        const statusEl = document.getElementById('supabaseStatus');
-                        const syncStatusEl = document.getElementById('syncStatus');
-                        
-                        if (statusEl) {
-                            statusEl.textContent = 'Connected';
-                            statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
-                        }
-                        if (syncStatusEl) {
-                            syncStatusEl.textContent = 'Cloud';
-                        }
-                        console.log('✅ Auto-connected to Supabase');
-                    } else {
-                        console.warn('⚠️ Supabase library not loaded');
+                    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
+                        console.warn('Supabase not available');
+                        return;
                     }
+                    supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+                    currentProvider = 'supabase';
+                    var statusEl = document.getElementById('supabaseStatus');
+                    var syncEl = document.getElementById('syncStatus');
+                    if (statusEl) {
+                        statusEl.textContent = 'Connected';
+                        statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+                    }
+                    if (syncEl) syncEl.textContent = 'Cloud';
+                    console.log('Supabase connected');
                 } catch (e) {
-                    console.log('Supabase auto-connect failed:', e);
+                    console.warn('Supabase error:', e);
                 }
             }
         }
