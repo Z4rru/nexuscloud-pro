@@ -875,7 +875,7 @@
         let currentView = 'grid';
         let contextMenuTarget = null;
 
-        let currentProvider = 'local';
+       
         let isOnline = navigator.onLine;
         let sqlHistory = [];
         let notifications = [];
@@ -1123,14 +1123,14 @@
         }
 
         // ==================== CLOUD PROVIDERS ====================
-               async function tryAutoConnect() {
+                     async function tryAutoConnect() {
             if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
                 try {
                     if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
                         console.warn('Supabase not available');
                         return;
                     }
-                                        supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+                    supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
                     currentProvider = 'supabase';
                     var statusEl = document.getElementById('supabaseStatus');
                     var syncEl = document.getElementById('syncStatus');
