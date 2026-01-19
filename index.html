@@ -2750,7 +2750,12 @@ SELECT * FROM logs;`
         }
 
         // ==================== START ====================
-        document.addEventListener('DOMContentLoaded', init);
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            // Document already loaded, run immediately
+            init();
+        }
     </script>
 </body>
 </html>
