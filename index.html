@@ -848,8 +848,11 @@
                 local: 1024 * 1024 * 1024, // 1GB
                 supabase: 1024 * 1024 * 1024, // 1GB
                 github: 1024 * 1024 * 1024 // 1GB per repo
-            }
-        };
+            },
+    // ADD THESE LINES:
+    SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
+    SUPABASE_KEY: 'sb_secret_bdLRE0rrw352qq4YQDDnBQ_UB0zcpQ2'  // Get this from Supabase Dashboard
+};
 
         // ==================== STATE ====================
         let db = null;
@@ -1019,17 +1022,20 @@
 
         // ==================== CLOUD PROVIDERS ====================
         async function tryAutoConnect() {
-            const settings = await loadAllSettings();
-            
-            // Try Supabase
-            if (settings.supabaseUrl && settings.supabaseKey) {
-                try {
-                    await connectSupabase(true);
-                } catch (e) {
-                    console.log('Auto-connect to Supabase failed');
-                }
-            }
+    // Auto-connect using hardcoded credentials
+    if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
+        try {
+            supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+            currentProvider = 'supabase';
+            document.getElementById('supabaseStatus').textContent = 'Connected';
+            document.getElementById('supabaseStatus').className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+            document.getElementById('syncStatus').textContent = 'Cloud';
+            console.log('✅ Auto-connected to Supabase');
+        } catch (e) {
+            console.log('Auto-connect to Supabase failed:', e);
         }
+    }
+}
 
         async function connectSupabase(silent = false) {
             const url = document.getElementById('supabaseUrl')?.value || (await dbGet('settings', 'supabaseUrl'))?.value;
