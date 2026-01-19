@@ -838,7 +838,7 @@
         </button>
     </div>
     
-    <input type="file" id="importInput" class="hidden" accept=".json">
+            <input type="file" id="importInput" class="hidden" accept=".json">
 
             <script>
         // ==================== IMMEDIATE FAILSAFE ====================
@@ -868,14 +868,15 @@
         };
 
         // ==================== STATE ====================
+                // ==================== STATE ====================
         let db = null;
         let currentFolder = null;
         let sqlTables = {};
         let selectedFiles = new Set();
         let currentView = 'grid';
         let contextMenuTarget = null;
-
-       
+        let currentProvider = 'local';
+        let supabaseClient = null;
         let isOnline = navigator.onLine;
         let sqlHistory = [];
         let notifications = [];
