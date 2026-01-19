@@ -118,10 +118,10 @@
             <i class="fas fa-bars text-xl"></i>
         </button>
         
-        <!-- Sidebar Overlay -->
-        <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden lg:hidden" onclick="toggleSidebar()"></div>
-        
-        <!-- Sidebar -->
+            <!-- Sidebar Overlay -->
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden hidden" onclick="toggleSidebar()"></div>
+    
+            <!-- Sidebar -->
         <aside id="sidebar" class="w-72 glass-dark p-6 flex flex-col fixed h-full z-50 transition-transform duration-300">
             <div class="flex items-center gap-3 mb-8">
                 <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center pulse-glow">
@@ -181,10 +181,10 @@
                 </div>
                 <div class="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
                     <div id="storageBar" class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-700" style="width:0%"></div>
-                </div>
+                                </div>
                 <div class="flex justify-between mt-2">
                     <p id="storageText" class="text-xs text-gray-500">0 B of 1 GB</p>
-                    <p id="storageProvider" class="text-xs text-indigo-400">Local Storage</p>
+                    <p id="storageProviderLabel" class="text-xs text-indigo-400">Local Storage</p>
                 </div>
             </div>
             
@@ -2481,40 +2481,64 @@ SELECT * FROM logs;`
             showToast('Complete', 'Database verified', 'success');
         }
 
-        // ==================== UI ====================
         function showSection(section) {
-            document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
-            const sectionEl = document.getElementById(`${section}Section`);
-            if (sectionEl) sectionEl.classList.remove('hidden');
-            
-            document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
-            
-            const titles = {
-                dashboard: 'Dashboard', files: 'My Files', upload: 'Upload Files',
-                database: 'SQL Database', analytics: 'Analytics', shared: 'Shared Files', settings: 'Settings'
-            };
-            
-            const pageTitle = document.getElementById('pageTitle');
-            if (pageTitle) pageTitle.textContent = titles[section] || 'Dashboard';
-            
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('sidebarOverlay');
-            if (sidebar) sidebar.classList.add('-translate-x-full');
-            if (overlay) overlay.classList.add('hidden');
-            
-            if (section === 'analytics') {
-                updateStats();
-                loadActivityLog();
-            }
-            if (section === 'database') updateLineNumbers();
+    // Hide all sections
+    document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
+    const sectionEl = document.getElementById(`${section}Section`);
+    if (sectionEl) sectionEl.classList.remove('hidden');
+    
+    // Update nav active state
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.classList.remove('active', 'bg-white/10');
+        if (btn.getAttribute('onclick')?.includes(`'${section}'`)) {
+            btn.classList.add('active', 'bg-white/10');
         }
+    });
+    
+    const titles = {
+        dashboard: 'Dashboard', files: 'My Files', upload: 'Upload Files',
+        database: 'SQL Database', analytics: 'Analytics', shared: 'Shared Files', settings: 'Settings'
+    };
+    
+    const pageTitle = document.getElementById('pageTitle');
+    if (pageTitle) pageTitle.textContent = titles[section] || 'Dashboard';
+    
+    // Close sidebar on mobile after selection
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    if (window.innerWidth < 1024) {
+        if (sidebar) sidebar.classList.add('-translate-x-full');
+        if (overlay) overlay.classList.add('hidden');
+    }
+    
+    if (section === 'analytics') {
+        updateStats();
+        loadActivityLog();
+    }
+    if (section === 'database') updateLineNumbers();
+}
 
         function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('sidebarOverlay');
-            if (sidebar) sidebar.classList.toggle('-translate-x-full');
-            if (overlay) overlay.classList.toggle('hidden');
-        }
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    
+    if (!sidebar || !overlay) {
+        console.error('Sidebar elements not found');
+        return;
+    }
+    
+    const isHidden = sidebar.classList.contains('-translate-x-full');
+    
+    if (isHidden) {
+        sidebar.classList.remove('-translate-x-full');
+        overlay.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    } else {
+        sidebar.classList.add('-translate-x-full');
+        overlay.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+}
 
         function showModal(title, content) {
             const modalTitle = document.getElementById('modalTitle');
@@ -2744,53 +2768,7 @@ SELECT * FROM logs;`
 
         // ==================== SERVICE WORKER ====================
                 // ==================== INITIALIZATION ====================
-        async function init() {
-            try {
-                console.log('NexusCloud Pro initializing...');
-                
-                // Initialize database
-                await initDB();
-                
-                // Initialize particles
-                initParticles();
-                
-                // Initialize event listeners
-                initEventListeners();
-                
-                // Try auto-connect to Supabase
-                await tryAutoConnect();
-                
-                // Load data
-                await loadFiles();
-                await loadSQLTables();
-                await updateStats();
-                await loadActivityLog();
-                
-                // Update online status
-                updateOnlineStatus();
-                window.addEventListener('online', updateOnlineStatus);
-                window.addEventListener('offline', updateOnlineStatus);
-                
-                // Hide loader
-                const loader = document.getElementById('loader');
-                if (loader) {
-                    loader.style.opacity = '0';
-                    loader.style.transition = 'opacity 0.5s ease';
-                    setTimeout(() => {
-                        loader.style.display = 'none';
-                    }, 500);
-                }
-                
-                console.log('NexusCloud Pro initialized successfully');
-            } catch (error) {
-                console.error('Initialization error:', error);
-                // Still hide loader on error to show UI
-                const loader = document.getElementById('loader');
-                if (loader) loader.style.display = 'none';
-                showToast('Warning', 'Some features may be limited', 'warning');
-            }
-        }
-
+               // ==================== SERVICE WORKER ====================
         // ==================== SERVICE WORKER ====================
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
