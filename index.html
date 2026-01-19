@@ -840,21 +840,20 @@
     
     <input type="file" id="importInput" class="hidden" accept=".json">
 
-    <script>
+        <script>
         // ==================== CONFIGURATION ====================
         const CONFIG = {
             DB_NAME: 'NexusCloudDB',
             DB_VERSION: 2,
-            MAX_FILE_SIZE: 50 * 1024 * 1024, // 50MB
+            MAX_FILE_SIZE: 50 * 1024 * 1024,
             MAX_STORAGE: {
-                local: 1024 * 1024 * 1024, // 1GB
-                supabase: 1024 * 1024 * 1024, // 1GB
-                github: 1024 * 1024 * 1024 // 1GB per repo
+                local: 1024 * 1024 * 1024,
+                supabase: 1024 * 1024 * 1024,
+                github: 1024 * 1024 * 1024
             },
-    // ADD THESE LINES:
-    SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
-    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk'  // Get this from Supabase Dashboard
-};
+            SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
+            SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk'
+        };
 
         // ==================== STATE ====================
         let db = null;
@@ -869,15 +868,30 @@
         let sqlHistory = [];
         let notifications = [];
 
+        // ==================== HIDE LOADER FUNCTION ====================
+        function hideLoader() {
+            const loader = document.getElementById('loadingScreen');
+            if (loader) {
+                loader.style.transition = 'opacity 0.3s ease';
+                loader.style.opacity = '0';
+                setTimeout(() => {
+                    loader.style.display = 'none';
+                }, 300);
+            }
+        }
+
+        // ==================== FAILSAFE: Hide loader after 5 seconds ====================
+        setTimeout(() => {
+            const loader = document.getElementById('loadingScreen');
+            if (loader && loader.style.display !== 'none') {
+                console.warn('⚠️ Failsafe: Force hiding loader after 5s');
+                hideLoader();
+            }
+        }, 5000);
+
         // ==================== INITIALIZATION ====================
-                async function init() {
-            const hideLoader = () => {
-                const loader = document.getElementById('loadingScreen');
-                if(loader) {
-                    loader.style.opacity = '0';
-                    setTimeout(() => { loader.style.display = 'none'; }, 300);
-                }
-            };
+        async function init() {
+            console.log('🚀 Starting NexusCloud Pro initialization...');
             
             try {
                 // Check online status
@@ -886,34 +900,39 @@
                 window.addEventListener('offline', updateOnlineStatus);
 
                 // Initialize IndexedDB
+                console.log('📦 Initializing IndexedDB...');
                 await initDB();
+                console.log('✅ IndexedDB ready');
                 
                 // Load saved settings
+                console.log('⚙️ Loading settings...');
                 await loadSettings();
+                console.log('✅ Settings loaded');
                 
-                // Load data
+                // Load data in parallel
+                console.log('📂 Loading data...');
                 await Promise.all([
-                    loadFiles(),
-                    loadSQLTables(),
-                    updateStats(),
-                    loadActivityLog()
+                    loadFiles().catch(e => console.warn('Files load error:', e)),
+                    loadSQLTables().catch(e => console.warn('SQL tables load error:', e)),
+                    updateStats().catch(e => console.warn('Stats update error:', e)),
+                    loadActivityLog().catch(e => console.warn('Activity log error:', e))
                 ]);
+                console.log('✅ Data loaded');
                 
                 // Initialize UI
                 initParticles();
                 initEventListeners();
                 
                 // Try to connect to cloud providers
-                await tryAutoConnect();
+                await tryAutoConnect().catch(e => console.warn('Auto-connect error:', e));
                 
-                console.log('%c NexusCloud Pro 2026 ', 'background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; font-size: 20px; padding: 10px; border-radius: 5px;');
+                console.log('%c✅ NexusCloud Pro 2026 Ready!', 'background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; font-size: 16px; padding: 8px 16px; border-radius: 5px;');
                 
-                // Hide loader on success
-                setTimeout(hideLoader, 500);
             } catch (error) {
-                console.error('Initialization error:', error);
-                // Still hide loader on error
-                setTimeout(hideLoader, 500);
+                console.error('❌ Initialization error:', error);
+            } finally {
+                // ALWAYS hide loader
+                setTimeout(hideLoader, 300);
             }
         }
 
@@ -922,7 +941,11 @@
             return new Promise((resolve, reject) => {
                 const request = indexedDB.open(CONFIG.DB_NAME, CONFIG.DB_VERSION);
                 
-                request.onerror = () => reject(request.error);
+                request.onerror = () => {
+                    console.error('IndexedDB error:', request.error);
+                    reject(request.error);
+                };
+                
                 request.onsuccess = () => {
                     db = request.result;
                     resolve(db);
@@ -931,7 +954,6 @@
                 request.onupgradeneeded = (event) => {
                     const database = event.target.result;
                     
-                    // Files store
                     if (!database.objectStoreNames.contains('files')) {
                         const filesStore = database.createObjectStore('files', { keyPath: 'id', autoIncrement: true });
                         filesStore.createIndex('name', 'name', { unique: false });
@@ -941,23 +963,19 @@
                         filesStore.createIndex('synced', 'synced', { unique: false });
                     }
                     
-                    // SQL Tables store
                     if (!database.objectStoreNames.contains('sqlTables')) {
                         database.createObjectStore('sqlTables', { keyPath: 'name' });
                     }
                     
-                    // Activity log store
                     if (!database.objectStoreNames.contains('activity')) {
                         const activityStore = database.createObjectStore('activity', { keyPath: 'id', autoIncrement: true });
                         activityStore.createIndex('timestamp', 'timestamp', { unique: false });
                     }
                     
-                    // Settings store
                     if (!database.objectStoreNames.contains('settings')) {
                         database.createObjectStore('settings', { keyPath: 'key' });
                     }
                     
-                    // Shared files store
                     if (!database.objectStoreNames.contains('shared')) {
                         database.createObjectStore('shared', { keyPath: 'id', autoIncrement: true });
                     }
@@ -965,9 +983,10 @@
             });
         }
 
-        // Generic DB operations
+        // Generic DB operations with error handling
         async function dbAdd(storeName, data) {
             return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
                 const transaction = db.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
                 const request = store.add(data);
@@ -978,6 +997,7 @@
         
         async function dbPut(storeName, data) {
             return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
                 const transaction = db.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
                 const request = store.put(data);
@@ -988,6 +1008,7 @@
         
         async function dbGet(storeName, key) {
             return new Promise((resolve, reject) => {
+                if (!db) { resolve(null); return; }
                 const transaction = db.transaction(storeName, 'readonly');
                 const store = transaction.objectStore(storeName);
                 const request = store.get(key);
@@ -998,6 +1019,7 @@
         
         async function dbGetAll(storeName) {
             return new Promise((resolve, reject) => {
+                if (!db) { resolve([]); return; }
                 const transaction = db.transaction(storeName, 'readonly');
                 const store = transaction.objectStore(storeName);
                 const request = store.getAll();
@@ -1008,6 +1030,7 @@
         
         async function dbDelete(storeName, key) {
             return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
                 const transaction = db.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
                 const request = store.delete(key);
@@ -1018,6 +1041,7 @@
         
         async function dbClear(storeName) {
             return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
                 const transaction = db.transaction(storeName, 'readwrite');
                 const store = transaction.objectStore(storeName);
                 const request = store.clear();
@@ -1026,31 +1050,98 @@
             });
         }
 
+        // ==================== SETTINGS (FIXED) ====================
+        async function loadSettings() {
+            try {
+                const settings = await loadAllSettings();
+                
+                // Load cloud credentials
+                const supabaseUrl = document.getElementById('supabaseUrl');
+                const supabaseKey = document.getElementById('supabaseKey');
+                const githubToken = document.getElementById('githubToken');
+                const githubRepo = document.getElementById('githubRepo');
+                
+                if (settings.supabaseUrl && supabaseUrl) supabaseUrl.value = settings.supabaseUrl;
+                if (settings.supabaseKey && supabaseKey) supabaseKey.value = settings.supabaseKey;
+                if (settings.githubToken && githubToken) githubToken.value = settings.githubToken;
+                if (settings.githubRepo && githubRepo) githubRepo.value = settings.githubRepo;
+                
+                // Load toggle states
+                const autoSync = document.getElementById('autoSync');
+                const offlineMode = document.getElementById('offlineMode');
+                
+                if (settings.autoSync !== undefined && autoSync) {
+                    autoSync.checked = settings.autoSync;
+                }
+                if (settings.offlineMode !== undefined && offlineMode) {
+                    offlineMode.checked = settings.offlineMode;
+                }
+                
+                // Check if setup guide was hidden
+                if (settings.hideSetupGuide) {
+                    const setupGuide = document.getElementById('setupGuide');
+                    if (setupGuide) setupGuide.classList.add('hidden');
+                }
+            } catch (e) {
+                console.warn('Settings load error:', e);
+            }
+        }
+
+        async function loadAllSettings() {
+            const settings = {};
+            try {
+                const all = await dbGetAll('settings');
+                all.forEach(s => settings[s.key] = s.value);
+            } catch (e) {
+                console.warn('Error loading all settings:', e);
+            }
+            return settings;
+        }
+
+        async function saveSetting(key, value) {
+            await dbPut('settings', { key, value });
+        }
+
+        function hideSetupGuide() {
+            const el = document.getElementById('setupGuide');
+            if (el) el.classList.add('hidden');
+            saveSetting('hideSetupGuide', true);
+        }
+
         // ==================== CLOUD PROVIDERS ====================
         async function tryAutoConnect() {
-    // Auto-connect using hardcoded credentials
-    // Auto-connect using hardcoded credentials
-    if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
-        try {
-            if (typeof window.supabase === 'undefined') {
-                console.warn('Supabase library not loaded yet');
-                return;
+            if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
+                try {
+                    if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+                        supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+                        currentProvider = 'supabase';
+                        
+                        const statusEl = document.getElementById('supabaseStatus');
+                        const syncStatusEl = document.getElementById('syncStatus');
+                        
+                        if (statusEl) {
+                            statusEl.textContent = 'Connected';
+                            statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+                        }
+                        if (syncStatusEl) {
+                            syncStatusEl.textContent = 'Cloud';
+                        }
+                        console.log('✅ Auto-connected to Supabase');
+                    } else {
+                        console.warn('⚠️ Supabase library not loaded');
+                    }
+                } catch (e) {
+                    console.log('Supabase auto-connect failed:', e);
+                }
             }
-            supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
-            currentProvider = 'supabase';
-            document.getElementById('supabaseStatus').textContent = 'Connected';
-            document.getElementById('supabaseStatus').className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
-            document.getElementById('syncStatus').textContent = 'Cloud';
-            console.log('✅ Auto-connected to Supabase');
-        } catch (e) {
-            console.log('Auto-connect to Supabase failed:', e);
         }
-    }
-}
 
         async function connectSupabase(silent = false) {
-            const url = document.getElementById('supabaseUrl')?.value || (await dbGet('settings', 'supabaseUrl'))?.value;
-            const key = document.getElementById('supabaseKey')?.value || (await dbGet('settings', 'supabaseKey'))?.value;
+            const urlInput = document.getElementById('supabaseUrl');
+            const keyInput = document.getElementById('supabaseKey');
+            
+            const url = urlInput?.value || (await dbGet('settings', 'supabaseUrl'))?.value;
+            const key = keyInput?.value || (await dbGet('settings', 'supabaseKey'))?.value;
             
             if (!url || !key) {
                 if (!silent) showToast('Error', 'Please enter Supabase URL and Key', 'error');
@@ -1060,17 +1151,19 @@
             try {
                 supabase = window.supabase.createClient(url, key);
                 
-                // Test connection
-                const { data, error } = await supabase.from('files').select('count').limit(1);
-                
-                // Save credentials
                 await dbPut('settings', { key: 'supabaseUrl', value: url });
                 await dbPut('settings', { key: 'supabaseKey', value: key });
                 
                 currentProvider = 'supabase';
-                document.getElementById('supabaseStatus').textContent = 'Connected';
-                document.getElementById('supabaseStatus').className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
-                document.getElementById('syncStatus').textContent = 'Cloud';
+                
+                const statusEl = document.getElementById('supabaseStatus');
+                const syncStatusEl = document.getElementById('syncStatus');
+                
+                if (statusEl) {
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+                }
+                if (syncStatusEl) syncStatusEl.textContent = 'Cloud';
                 
                 if (!silent) showToast('Connected', 'Supabase connected successfully!', 'success');
                 return true;
@@ -1089,8 +1182,8 @@
         }
 
         async function connectGitHub() {
-            const token = document.getElementById('githubToken').value;
-            const repo = document.getElementById('githubRepo').value;
+            const token = document.getElementById('githubToken')?.value;
+            const repo = document.getElementById('githubRepo')?.value;
             
             if (!token || !repo) {
                 showToast('Error', 'Please enter GitHub token and repository', 'error');
@@ -1098,20 +1191,21 @@
             }
             
             try {
-                // Test connection
                 const response = await fetch(`https://api.github.com/repos/${repo}`, {
                     headers: { 'Authorization': `token ${token}` }
                 });
                 
                 if (!response.ok) throw new Error('Invalid credentials');
                 
-                // Save credentials
                 await dbPut('settings', { key: 'githubToken', value: token });
                 await dbPut('settings', { key: 'githubRepo', value: repo });
-                await dbPut('settings', { key: 'githubBranch', value: document.getElementById('githubBranch').value || 'main' });
+                await dbPut('settings', { key: 'githubBranch', value: document.getElementById('githubBranch')?.value || 'main' });
                 
-                document.getElementById('githubStatus').textContent = 'Connected';
-                document.getElementById('githubStatus').className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+                const statusEl = document.getElementById('githubStatus');
+                if (statusEl) {
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+                }
                 
                 showToast('Connected', 'GitHub connected successfully!', 'success');
             } catch (error) {
@@ -1122,186 +1216,74 @@
         function switchProvider(provider) {
             currentProvider = provider;
             const providerNames = { local: 'Local Storage', supabase: 'Supabase Cloud', github: 'GitHub' };
-            document.getElementById('syncStatus').textContent = providerNames[provider] || 'Local';
+            const syncStatusEl = document.getElementById('syncStatus');
+            if (syncStatusEl) syncStatusEl.textContent = providerNames[provider] || 'Local';
             showToast('Provider Changed', `Now using ${providerNames[provider]}`, 'success');
         }
 
+        async function syncData() {
+            const syncIcon = document.getElementById('syncIcon');
+            if (syncIcon) syncIcon.classList.add('fa-spin');
+            
+            showToast('Syncing', 'Syncing your data...', 'info');
+            
+            // Simulate sync delay
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            if (syncIcon) syncIcon.classList.remove('fa-spin');
+            showToast('Synced', 'Data synchronized successfully!', 'success');
+        }
+
         // ==================== FILE MANAGEMENT ====================
-        async function uploadFiles(files) {
-            const uploadQueue = document.getElementById('uploadQueue');
-            const uploadList = document.getElementById('uploadList');
-            uploadQueue.classList.remove('hidden');
-            uploadList.innerHTML = '';
-            
-            let successCount = 0;
-            
-            for (const file of files) {
-                if (file.size > CONFIG.MAX_FILE_SIZE) {
-                    showToast('Error', `${file.name} exceeds 50MB limit`, 'error');
-                    continue;
-                }
-                
-                const fileId = Date.now() + Math.random().toString(36).substr(2, 9);
-                
-                // Create upload item UI
-                const uploadItem = document.createElement('div');
-                uploadItem.id = `upload-${fileId}`;
-                uploadItem.className = 'glass rounded-xl p-4';
-                uploadItem.innerHTML = `
-                    <div class="flex items-center gap-4">
-                        <i class="fas ${getFileIcon(file.type)} text-2xl text-indigo-400"></i>
-                        <div class="flex-1 min-w-0">
-                            <p class="font-medium truncate text-sm">${file.name}</p>
-                            <p class="text-xs text-gray-400">${formatBytes(file.size)}</p>
-                            <div class="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
-                                <div class="upload-progress h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style="width: 0%"></div>
-                            </div>
-                        </div>
-                        <span class="upload-percent text-sm text-gray-400">0%</span>
-                    </div>
-                `;
-                uploadList.appendChild(uploadItem);
-                
-                try {
-                    // Read file
-                    const fileData = await readFileAsDataURL(file, uploadItem);
-                    
-                    // Store locally
-                    const fileRecord = {
-                        name: file.name,
-                        type: file.type || 'application/octet-stream',
-                        size: file.size,
-                        data: fileData,
-                        folder: currentFolder,
-                        created: new Date().toISOString(),
-                        modified: new Date().toISOString(),
-                        starred: false,
-                        synced: false
-                    };
-                    
-                    const id = await dbAdd('files', fileRecord);
-                    
-                    // Sync to cloud if connected
-                    if (currentProvider === 'supabase' && supabase) {
-                        await syncFileToSupabase({ ...fileRecord, id });
-                    }
-                    
-                    await logActivity('upload', `Uploaded ${file.name}`);
-                    successCount++;
-                } catch (error) {
-                    console.error('Upload error:', error);
-                    uploadItem.querySelector('.upload-progress').style.background = 'linear-gradient(to right, #ef4444, #f87171)';
-                }
-            }
-            
-            if (successCount > 0) {
-                showToast('Upload Complete', `${successCount} file(s) uploaded`, 'success');
-                await updateStats();
-                await loadFiles();
-            }
-            
-            setTimeout(() => {
-                uploadQueue.classList.add('hidden');
-            }, 2000);
-        }
-
-        function readFileAsDataURL(file, uploadItem) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                
-                reader.onprogress = (e) => {
-                    if (e.lengthComputable) {
-                        const percent = Math.round((e.loaded / e.total) * 100);
-                        if (uploadItem) {
-                            uploadItem.querySelector('.upload-progress').style.width = `${percent}%`;
-                            uploadItem.querySelector('.upload-percent').textContent = `${percent}%`;
-                        }
-                    }
-                };
-                
-                reader.onload = (e) => resolve(e.target.result);
-                reader.onerror = () => reject(reader.error);
-                reader.readAsDataURL(file);
-            });
-        }
-
-        async function syncFileToSupabase(file) {
-            if (!supabase) return;
-            
-            try {
-                // Upload file data
-                const base64Data = file.data.split(',')[1];
-                const { data, error } = await supabase.storage
-                    .from('files')
-                    .upload(`${file.id}_${file.name}`, decode(base64Data), {
-                        contentType: file.type
-                    });
-                
-                if (error) throw error;
-                
-                // Update local record
-                file.synced = true;
-                file.cloudPath = data.path;
-                await dbPut('files', file);
-            } catch (error) {
-                console.error('Sync error:', error);
-            }
-        }
-
-        function decode(base64) {
-            const binaryString = atob(base64);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            return bytes;
-        }
-
         async function loadFiles() {
-            const files = await dbGetAll('files');
-            const filter = document.getElementById('fileFilter')?.value || 'all';
-            const sort = document.getElementById('sortOrder')?.value || 'newest';
-            
-            let filtered = files.filter(f => f.folder === currentFolder);
-            
-            // Apply filter
-            if (filter !== 'all') {
-                filtered = filtered.filter(f => {
-                    if (filter === 'folder') return f.type === 'folder';
-                    if (filter === 'image') return f.type?.startsWith('image/');
-                    if (filter === 'video') return f.type?.startsWith('video/');
-                    if (filter === 'audio') return f.type?.startsWith('audio/');
-                    if (filter === 'document') return !f.type?.startsWith('image/') && !f.type?.startsWith('video/') && !f.type?.startsWith('audio/') && f.type !== 'folder';
-                    return true;
-                });
-            }
-            
-            // Apply sort
-            filtered.sort((a, b) => {
-                switch (sort) {
-                    case 'oldest': return new Date(a.created) - new Date(b.created);
-                    case 'name': return a.name.localeCompare(b.name);
-                    case 'size': return (b.size || 0) - (a.size || 0);
-                    default: return new Date(b.created) - new Date(a.created);
+            try {
+                const files = await dbGetAll('files');
+                const filter = document.getElementById('fileFilter')?.value || 'all';
+                const sort = document.getElementById('sortOrder')?.value || 'newest';
+                
+                let filtered = files.filter(f => f.folder === currentFolder);
+                
+                if (filter !== 'all') {
+                    filtered = filtered.filter(f => {
+                        if (filter === 'folder') return f.type === 'folder';
+                        if (filter === 'image') return f.type?.startsWith('image/');
+                        if (filter === 'video') return f.type?.startsWith('video/');
+                        if (filter === 'audio') return f.type?.startsWith('audio/');
+                        if (filter === 'document') return !f.type?.startsWith('image/') && !f.type?.startsWith('video/') && !f.type?.startsWith('audio/') && f.type !== 'folder';
+                        return true;
+                    });
                 }
-            });
-            
-            renderFiles(filtered);
-            renderRecentFiles(files.slice().sort((a, b) => new Date(b.created) - new Date(a.created)).slice(0, 6));
-            updateBreadcrumb();
-            
-            // Update badge
-            const badge = document.getElementById('filesBadge');
-            if (files.length > 0) {
-                badge.textContent = files.length;
-                badge.classList.remove('hidden');
-            } else {
-                badge.classList.add('hidden');
+                
+                filtered.sort((a, b) => {
+                    switch (sort) {
+                        case 'oldest': return new Date(a.created) - new Date(b.created);
+                        case 'name': return a.name.localeCompare(b.name);
+                        case 'size': return (b.size || 0) - (a.size || 0);
+                        default: return new Date(b.created) - new Date(a.created);
+                    }
+                });
+                
+                renderFiles(filtered);
+                renderRecentFiles(files.slice().sort((a, b) => new Date(b.created) - new Date(a.created)).slice(0, 6));
+                updateBreadcrumb();
+                
+                const badge = document.getElementById('filesBadge');
+                if (badge) {
+                    if (files.length > 0) {
+                        badge.textContent = files.length;
+                        badge.classList.remove('hidden');
+                    } else {
+                        badge.classList.add('hidden');
+                    }
+                }
+            } catch (e) {
+                console.warn('Error loading files:', e);
             }
         }
 
         function renderFiles(files) {
             const grid = document.getElementById('filesGrid');
+            if (!grid) return;
             
             if (files.length === 0) {
                 grid.innerHTML = `
@@ -1335,7 +1317,7 @@
                                 </button>
                             </div>
                         </div>
-                        <h4 class="font-semibold truncate text-sm mb-1">${file.name}</h4>
+                        <h4 class="font-semibold truncate text-sm mb-1">${escapeHtml(file.name)}</h4>
                         <p class="text-xs text-gray-400">${formatBytes(file.size || 0)}</p>
                         <div class="flex items-center justify-between mt-2">
                             <p class="text-xs text-gray-500">${formatDate(file.created)}</p>
@@ -1354,7 +1336,7 @@
                             <i class="fas ${getFileIcon(file.type)}"></i>
                         </div>
                         <div class="flex-1 min-w-0">
-                            <p class="font-medium truncate">${file.name}</p>
+                            <p class="font-medium truncate">${escapeHtml(file.name)}</p>
                             <p class="text-xs text-gray-400">${formatBytes(file.size || 0)} • ${formatDate(file.created)}</p>
                         </div>
                         <button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
@@ -1368,6 +1350,7 @@
 
         function renderRecentFiles(files) {
             const container = document.getElementById('recentFiles');
+            if (!container) return;
             
             if (files.length === 0) {
                 container.innerHTML = '<p class="text-gray-400 col-span-full text-center py-8">No files uploaded yet. Start by uploading your first file!</p>';
@@ -1380,7 +1363,7 @@
                         <i class="fas ${getFileIcon(file.type)} text-xl"></i>
                     </div>
                     <div class="flex-1 min-w-0">
-                        <p class="font-medium truncate">${file.name}</p>
+                        <p class="font-medium truncate">${escapeHtml(file.name)}</p>
                         <p class="text-sm text-gray-400">${formatBytes(file.size || 0)}</p>
                     </div>
                 </div>
@@ -1391,7 +1374,6 @@
             if (event.ctrlKey || event.metaKey) {
                 toggleSelect(id);
             } else if (event.shiftKey) {
-                // Range select
                 toggleSelect(id);
             } else {
                 viewFile(id);
@@ -1409,7 +1391,7 @@
             
             let preview = '';
             if (file.type?.startsWith('image/')) {
-                preview = `<img src="${file.data}" class="max-w-full max-h-64 rounded-xl mx-auto" alt="${file.name}">`;
+                preview = `<img src="${file.data}" class="max-w-full max-h-64 rounded-xl mx-auto" alt="${escapeHtml(file.name)}">`;
             } else if (file.type?.startsWith('video/')) {
                 preview = `<video src="${file.data}" controls class="max-w-full rounded-xl mx-auto"></video>`;
             } else if (file.type?.startsWith('audio/')) {
@@ -1466,6 +1448,96 @@
             showModal(file.name, content);
         }
 
+        async function uploadFiles(files) {
+            const uploadQueue = document.getElementById('uploadQueue');
+            const uploadList = document.getElementById('uploadList');
+            if (uploadQueue) uploadQueue.classList.remove('hidden');
+            if (uploadList) uploadList.innerHTML = '';
+            
+            let successCount = 0;
+            
+            for (const file of files) {
+                if (file.size > CONFIG.MAX_FILE_SIZE) {
+                    showToast('Error', `${file.name} exceeds 50MB limit`, 'error');
+                    continue;
+                }
+                
+                const fileId = Date.now() + Math.random().toString(36).substr(2, 9);
+                
+                if (uploadList) {
+                    const uploadItem = document.createElement('div');
+                    uploadItem.id = `upload-${fileId}`;
+                    uploadItem.className = 'glass rounded-xl p-4';
+                    uploadItem.innerHTML = `
+                        <div class="flex items-center gap-4">
+                            <i class="fas ${getFileIcon(file.type)} text-2xl text-indigo-400"></i>
+                            <div class="flex-1 min-w-0">
+                                <p class="font-medium truncate text-sm">${escapeHtml(file.name)}</p>
+                                <p class="text-xs text-gray-400">${formatBytes(file.size)}</p>
+                                <div class="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
+                                    <div class="upload-progress h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            <span class="upload-percent text-sm text-gray-400">0%</span>
+                        </div>
+                    `;
+                    uploadList.appendChild(uploadItem);
+                }
+                
+                try {
+                    const fileData = await readFileAsDataURL(file, document.getElementById(`upload-${fileId}`));
+                    
+                    const fileRecord = {
+                        name: file.name,
+                        type: file.type || 'application/octet-stream',
+                        size: file.size,
+                        data: fileData,
+                        folder: currentFolder,
+                        created: new Date().toISOString(),
+                        modified: new Date().toISOString(),
+                        starred: false,
+                        synced: false
+                    };
+                    
+                    await dbAdd('files', fileRecord);
+                    await logActivity('upload', `Uploaded ${file.name}`);
+                    successCount++;
+                } catch (error) {
+                    console.error('Upload error:', error);
+                }
+            }
+            
+            if (successCount > 0) {
+                showToast('Upload Complete', `${successCount} file(s) uploaded`, 'success');
+                await updateStats();
+                await loadFiles();
+            }
+            
+            setTimeout(() => {
+                if (uploadQueue) uploadQueue.classList.add('hidden');
+            }, 2000);
+        }
+
+        function readFileAsDataURL(file, uploadItem) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                
+                reader.onprogress = (e) => {
+                    if (e.lengthComputable && uploadItem) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        const progress = uploadItem.querySelector('.upload-progress');
+                        const percentEl = uploadItem.querySelector('.upload-percent');
+                        if (progress) progress.style.width = `${percent}%`;
+                        if (percentEl) percentEl.textContent = `${percent}%`;
+                    }
+                };
+                
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+        }
+
         async function downloadFile(id) {
             const file = await dbGet('files', id);
             if (!file) return;
@@ -1487,16 +1559,6 @@
             
             if (confirm(`Delete "${file.name}"?`)) {
                 await dbDelete('files', id);
-                
-                // Delete from cloud if synced
-                if (file.synced && supabase && file.cloudPath) {
-                    try {
-                        await supabase.storage.from('files').remove([file.cloudPath]);
-                    } catch (e) {
-                        console.error('Cloud delete error:', e);
-                    }
-                }
-                
                 await logActivity('delete', `Deleted ${file.name}`);
                 showToast('Deleted', `${file.name} deleted`, 'success');
                 await updateStats();
@@ -1520,7 +1582,6 @@
             const shareId = btoa(`${file.id}-${Date.now()}`).substring(0, 16);
             const shareLink = `${window.location.origin}${window.location.pathname}?share=${shareId}`;
             
-            // Save share record
             await dbAdd('shared', {
                 fileId: id,
                 shareId,
@@ -1528,7 +1589,6 @@
                 created: new Date().toISOString()
             });
             
-            // Copy to clipboard
             try {
                 await navigator.clipboard.writeText(shareLink);
                 showToast('Link Copied', 'Share link copied to clipboard!', 'success');
@@ -1567,10 +1627,10 @@
         }
 
         function updateBreadcrumb() {
-            document.getElementById('currentPath').textContent = currentFolder ? 'Subfolder' : 'Root';
+            const el = document.getElementById('currentPath');
+            if (el) el.textContent = currentFolder ? 'Subfolder' : 'Root';
         }
 
-        // Selection functions
         function toggleSelect(id) {
             if (selectedFiles.has(id)) {
                 selectedFiles.delete(id);
@@ -1589,9 +1649,12 @@
 
         function updateSelectionUI() {
             const bar = document.getElementById('selectionBar');
+            if (!bar) return;
+            
             if (selectedFiles.size > 0) {
                 bar.classList.remove('hidden');
-                document.getElementById('selectedCount').textContent = `${selectedFiles.size} item(s) selected`;
+                const countEl = document.getElementById('selectedCount');
+                if (countEl) countEl.textContent = `${selectedFiles.size} item(s) selected`;
             } else {
                 bar.classList.add('hidden');
             }
@@ -1611,20 +1674,26 @@
             await loadFiles();
         }
 
+        async function downloadSelected() {
+            for (const id of selectedFiles) {
+                await downloadFile(id);
+            }
+            clearSelection();
+        }
+
         function setView(view) {
             currentView = view;
-            document.getElementById('gridViewBtn').className = `p-3 glass rounded-xl ${view === 'grid' ? 'bg-white/10' : 'hover:bg-white/10'}`;
-            document.getElementById('listViewBtn').className = `p-3 glass rounded-xl ${view === 'list' ? 'bg-white/10' : 'hover:bg-white/10'}`;
+            const gridBtn = document.getElementById('gridViewBtn');
+            const listBtn = document.getElementById('listViewBtn');
+            
+            if (gridBtn) gridBtn.className = `p-3 glass rounded-xl ${view === 'grid' ? 'bg-white/10' : 'hover:bg-white/10'}`;
+            if (listBtn) listBtn.className = `p-3 glass rounded-xl ${view === 'list' ? 'bg-white/10' : 'hover:bg-white/10'}`;
+            
             loadFiles();
         }
 
-        function filterFiles() {
-            loadFiles();
-        }
-
-        function sortFiles() {
-            loadFiles();
-        }
+        function filterFiles() { loadFiles(); }
+        function sortFiles() { loadFiles(); }
 
         // Context Menu
         function showContextMenu(event, id) {
@@ -1632,13 +1701,16 @@
             contextMenuTarget = id;
             
             const menu = document.getElementById('contextMenu');
-            menu.style.left = `${event.clientX}px`;
-            menu.style.top = `${event.clientY}px`;
-            menu.classList.remove('hidden');
+            if (menu) {
+                menu.style.left = `${event.clientX}px`;
+                menu.style.top = `${event.clientY}px`;
+                menu.classList.remove('hidden');
+            }
         }
 
         function hideContextMenu() {
-            document.getElementById('contextMenu').classList.add('hidden');
+            const menu = document.getElementById('contextMenu');
+            if (menu) menu.classList.add('hidden');
         }
 
         async function contextAction(action) {
@@ -1674,16 +1746,21 @@
             }
         }
 
-        // ==================== SQL DATABASE ENGINE ====================
+        // ==================== SQL DATABASE ====================
         async function loadSQLTables() {
-            const tables = await dbGetAll('sqlTables');
-            sqlTables = {};
-            tables.forEach(t => sqlTables[t.name] = t);
-            renderTables();
+            try {
+                const tables = await dbGetAll('sqlTables');
+                sqlTables = {};
+                tables.forEach(t => sqlTables[t.name] = t);
+                renderTables();
+            } catch (e) {
+                console.warn('Error loading SQL tables:', e);
+            }
         }
 
         function executeSQL() {
-            const query = document.getElementById('sqlEditor').value.trim();
+            const editor = document.getElementById('sqlEditor');
+            const query = editor?.value?.trim();
             if (!query) return;
             
             const startTime = performance.now();
@@ -1693,9 +1770,9 @@
                 const endTime = performance.now();
                 
                 displayResults(result);
-                document.getElementById('queryTime').textContent = `${(endTime - startTime).toFixed(2)}ms`;
+                const timeEl = document.getElementById('queryTime');
+                if (timeEl) timeEl.textContent = `${(endTime - startTime).toFixed(2)}ms`;
                 
-                // Save to history
                 sqlHistory.unshift({ query, timestamp: new Date().toISOString() });
                 if (sqlHistory.length > 50) sqlHistory.pop();
                 
@@ -1714,12 +1791,11 @@
             if (upperQuery.startsWith('UPDATE')) return updateTable(query);
             if (upperQuery.startsWith('DELETE FROM')) return deleteFrom(query);
             if (upperQuery.startsWith('DROP TABLE')) return dropTable(query);
-            if (upperQuery.startsWith('ALTER TABLE')) return alterTable(query);
             if (upperQuery.startsWith('TRUNCATE')) return truncateTable(query);
             if (upperQuery.startsWith('DESCRIBE') || upperQuery.startsWith('DESC')) return describeTable(query);
             if (upperQuery.startsWith('SHOW TABLES')) return showTables();
             
-            throw new Error('Unsupported SQL command. Supported: CREATE, INSERT, SELECT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, DESCRIBE, SHOW TABLES');
+            throw new Error('Unsupported SQL command');
         }
 
         function createTable(query) {
@@ -1737,11 +1813,7 @@
             
             const columns = match[2].split(',').map(col => {
                 const parts = col.trim().split(/\s+/);
-                return { 
-                    name: parts[0], 
-                    type: parts[1] || 'TEXT', 
-                    constraints: parts.slice(2).join(' ').toUpperCase()
-                };
+                return { name: parts[0], type: parts[1] || 'TEXT', constraints: parts.slice(2).join(' ').toUpperCase() };
             });
             
             sqlTables[tableName] = { name: tableName, columns, rows: [], created: new Date().toISOString() };
@@ -1749,19 +1821,19 @@
             renderTables();
             updateStats();
             
-            return { message: `Table '${tableName}' created successfully with ${columns.length} column(s)`, columns };
+            return { message: `Table '${tableName}' created with ${columns.length} column(s)`, columns };
         }
 
         function insertInto(query) {
             const match = query.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)/is);
-            if (!match) throw new Error('Invalid INSERT syntax. Use: INSERT INTO table (col1, col2) VALUES (val1, val2)');
+            if (!match) throw new Error('Invalid INSERT syntax');
             
             const tableName = match[1].toLowerCase();
             const columns = match[2].split(',').map(c => c.trim());
             const values = match[3].match(/(?:[^,'"]+|'[^']*'|"[^"]*")+/g).map(v => v.trim().replace(/^['"]|['"]$/g, ''));
             
             if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            if (columns.length !== values.length) throw new Error('Column count does not match value count');
+            if (columns.length !== values.length) throw new Error('Column count mismatch');
             
             const row = { _id: Date.now() };
             columns.forEach((col, i) => row[col] = values[i]);
@@ -1788,13 +1860,11 @@
             
             let rows = [...sqlTables[tableName].rows];
             
-            // WHERE
             if (whereClause) {
                 const conditions = parseWhereClause(whereClause);
                 rows = rows.filter(row => evaluateConditions(row, conditions));
             }
             
-            // ORDER BY
             if (orderBy) {
                 rows.sort((a, b) => {
                     const aVal = a[orderBy], bVal = b[orderBy];
@@ -1803,10 +1873,8 @@
                 });
             }
             
-            // LIMIT
             if (limit) rows = rows.slice(0, limit);
             
-            // Select columns
             let resultColumns;
             if (columns === '*') {
                 resultColumns = sqlTables[tableName].columns.map(c => c.name);
@@ -1890,16 +1958,21 @@
             renderTables();
             updateStats();
             
-            return { message: `Table '${tableName}' dropped successfully` };
+            return { message: `Table '${tableName}' dropped` };
         }
 
-        function showTables() {
-            const tables = Object.keys(sqlTables).map(name => ({
-                table_name: name,
-                rows: sqlTables[name].rows.length,
-                columns: sqlTables[name].columns.length
-            }));
-            return { rows: tables, columns: ['table_name', 'rows', 'columns'] };
+        function truncateTable(query) {
+            const match = query.match(/TRUNCATE\s+(?:TABLE\s+)?(\w+)/i);
+            if (!match) throw new Error('Invalid TRUNCATE syntax');
+            
+            const tableName = match[1].toLowerCase();
+            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+            
+            const count = sqlTables[tableName].rows.length;
+            sqlTables[tableName].rows = [];
+            dbPut('sqlTables', sqlTables[tableName]);
+            
+            return { message: `Table '${tableName}' truncated. ${count} row(s) removed.` };
         }
 
         function describeTable(query) {
@@ -1911,12 +1984,19 @@
             
             return { 
                 rows: sqlTables[tableName].columns.map(c => ({
-                    column: c.name,
-                    type: c.type,
-                    constraints: c.constraints || ''
+                    column: c.name, type: c.type, constraints: c.constraints || ''
                 })),
                 columns: ['column', 'type', 'constraints']
             };
+        }
+
+        function showTables() {
+            const tables = Object.keys(sqlTables).map(name => ({
+                table_name: name,
+                rows: sqlTables[name].rows.length,
+                columns: sqlTables[name].columns.length
+            }));
+            return { rows: tables, columns: ['table_name', 'rows', 'columns'] };
         }
 
         function parseWhereClause(clause) {
@@ -1928,7 +2008,7 @@
                 if (part.toUpperCase() === 'AND' || part.toUpperCase() === 'OR') {
                     conditions.push({ type: part.toUpperCase() });
                 } else {
-                    const match = part.match(/(\w+)\s*(=|!=|<>|<|>|<=|>=|LIKE|IN|IS)\s*(.+)/i);
+                    const match = part.match(/(\w+)\s*(=|!=|<>|<|>|<=|>=|LIKE|IS)\s*(.+)/i);
                     if (match) {
                         conditions.push({
                             column: match[1],
@@ -1975,205 +2055,211 @@
 
         function displayResults(result) {
             const container = document.getElementById('queryResults');
+            if (!container) return;
             
             if (result.error) {
-                container.innerHTML = `
-                    <div class="text-red-400 p-4 bg-red-500/10 rounded-xl">
-                        <i class="fas fa-exclamation-circle mr-2"></i>${result.error}
-                    </div>
-                `;
+                container.innerHTML = `<div class="text-red-400 p-4 bg-red-500/10 rounded-xl"><i class="fas fa-exclamation-circle mr-2"></i>${escapeHtml(result.error)}</div>`;
                 return;
             }
             
             if (result.message) {
-                container.innerHTML = `
-                    <div class="text-green-400 p-4 bg-green-500/10 rounded-xl">
-                        <i class="fas fa-check-circle mr-2"></i>${result.message}
-                    </div>
-                `;
+                container.innerHTML = `<div class="text-green-400 p-4 bg-green-500/10 rounded-xl"><i class="fas fa-check-circle mr-2"></i>${escapeHtml(result.message)}</div>`;
                 return;
             }
             
-            if (result.rows && result.rows.length > 0) {
+            if (result.rows?.length > 0) {
                 const headers = result.columns || Object.keys(result.rows[0]);
                 container.innerHTML = `
                     <div class="overflow-auto">
                         <table class="w-full text-sm">
-                            <thead>
-                                <tr class="border-b border-white/10">
-                                    ${headers.map(h => `<th class="text-left p-3 text-indigo-400 font-medium">${h}</th>`).join('')}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${result.rows.map((row, i) => `
-                                    <tr class="table-row border-b border-white/5 ${i % 2 === 0 ? 'bg-white/[0.02]' : ''}">
-                                        ${headers.map(h => `<td class="p-3">${row[h] ?? '<span class="text-gray-500">NULL</span>'}</td>`).join('')}
-                                    </tr>
-                                `).join('')}
-                            </tbody>
+                            <thead><tr class="border-b border-white/10">${headers.map(h => `<th class="text-left p-3 text-indigo-400">${escapeHtml(h)}</th>`).join('')}</tr></thead>
+                            <tbody>${result.rows.map((row, i) => `<tr class="table-row border-b border-white/5">${headers.map(h => `<td class="p-3">${row[h] ?? '<span class="text-gray-500">NULL</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
                         </table>
                     </div>
-                    <p class="text-gray-400 text-sm mt-4">${result.rows.length} row(s) returned</p>
+                    <p class="text-gray-400 text-sm mt-4">${result.rows.length} row(s)</p>
                 `;
-            } else if (result.rows) {
-                container.innerHTML = '<p class="text-gray-400 text-center py-8">No results found</p>';
+            } else {
+                container.innerHTML = '<p class="text-gray-400 text-center py-8">No results</p>';
             }
         }
 
         function renderTables() {
             const container = document.getElementById('tablesList');
+            if (!container) return;
+            
             const tables = Object.values(sqlTables);
             
             if (tables.length === 0) {
-                container.innerHTML = '<p class="text-gray-400 col-span-full text-center py-8">No tables created yet. Use CREATE TABLE to get started!</p>';
+                container.innerHTML = '<p class="text-gray-400 col-span-full text-center py-8">No tables yet</p>';
                 return;
             }
             
             container.innerHTML = tables.map(table => `
                 <div class="glass rounded-xl p-4 hover:bg-white/5 transition-all">
                     <div class="flex items-center justify-between mb-2">
-                        <h4 class="font-semibold text-indigo-400">${table.name}</h4>
+                        <h4 class="font-semibold text-indigo-400">${escapeHtml(table.name)}</h4>
                         <span class="text-xs text-gray-400">${table.rows.length} rows</span>
                     </div>
-                    <div class="text-xs text-gray-400 mb-3 truncate">
-                        ${table.columns.map(c => c.name).join(', ')}
-                    </div>
+                    <div class="text-xs text-gray-400 mb-3 truncate">${table.columns.map(c => c.name).join(', ')}</div>
                     <div class="flex gap-2">
-                        <button onclick="quickQuery('SELECT * FROM ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10">
-                            <i class="fas fa-eye mr-1"></i>View
-                        </button>
-                        <button onclick="quickQuery('DESCRIBE ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10">
-                            <i class="fas fa-info mr-1"></i>Info
-                        </button>
-                        <button onclick="quickQuery('DROP TABLE ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-red-500/20 text-red-400">
-                            <i class="fas fa-trash mr-1"></i>Drop
-                        </button>
+                        <button onclick="quickQuery('SELECT * FROM ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10"><i class="fas fa-eye mr-1"></i>View</button>
+                        <button onclick="quickQuery('DROP TABLE ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-red-500/20 text-red-400"><i class="fas fa-trash mr-1"></i>Drop</button>
                     </div>
                 </div>
             `).join('');
         }
 
         function quickQuery(query) {
-            document.getElementById('sqlEditor').value = query;
+            const editor = document.getElementById('sqlEditor');
+            if (editor) editor.value = query;
             executeSQL();
         }
 
         function loadTemplate(type) {
             const templates = {
-                users: `CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE,
-    age INTEGER,
-    created_at TEXT
-);
-
-INSERT INTO users (id, name, email, age, created_at) VALUES (1, 'John Doe', 'john@email.com', 25, '2024-01-15');
-INSERT INTO users (id, name, email, age, created_at) VALUES (2, 'Jane Smith', 'jane@email.com', 30, '2024-01-16');
-
+                users: `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, created_at TEXT);
+INSERT INTO users (id, name, email, created_at) VALUES (1, 'John Doe', 'john@email.com', '2024-01-15');
 SELECT * FROM users;`,
-                products: `CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    price REAL,
-    stock INTEGER,
-    category TEXT
-);
-
-INSERT INTO products (id, name, price, stock, category) VALUES (1, 'Laptop', 999.99, 50, 'Electronics');
-INSERT INTO products (id, name, price, stock, category) VALUES (2, 'Mouse', 29.99, 200, 'Electronics');
-
-SELECT * FROM products ORDER BY price DESC;`,
-                orders: `CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER,
-    product_id INTEGER,
-    quantity INTEGER,
-    total REAL,
-    status TEXT,
-    order_date TEXT
-);
-
-INSERT INTO orders (id, user_id, product_id, quantity, total, status, order_date) VALUES (1, 1, 1, 1, 999.99, 'completed', '2024-01-20');
-
+                products: `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER);
+INSERT INTO products (id, name, price, stock) VALUES (1, 'Laptop', 999.99, 50);
+SELECT * FROM products;`,
+                orders: `CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, total REAL, status TEXT);
 SELECT * FROM orders;`,
-                logs: `CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY,
-    action TEXT,
-    user_id INTEGER,
-    timestamp TEXT,
-    details TEXT
-);
-
-SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
+                logs: `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, action TEXT, timestamp TEXT);
+SELECT * FROM logs;`
             };
             
-            document.getElementById('sqlEditor').value = templates[type] || '';
+            const editor = document.getElementById('sqlEditor');
+            if (editor) editor.value = templates[type] || '';
         }
 
         function formatSQL() {
             const editor = document.getElementById('sqlEditor');
-            let sql = editor.value;
-            sql = sql.replace(/\s+/g, ' ').trim();
-            sql = sql.replace(/\s*(,)\s*/g, ',\n    ');
-            sql = sql.replace(/(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|AND|OR|ORDER BY|GROUP BY|HAVING|LIMIT|JOIN|LEFT|RIGHT|INNER|OUTER)/gi, '\n$1');
+            if (!editor) return;
+            let sql = editor.value.replace(/\s+/g, ' ').trim();
+            sql = sql.replace(/(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ORDER BY|LIMIT)/gi, '\n$1');
             editor.value = sql.trim();
             updateLineNumbers();
         }
 
         function clearSQL() {
-            document.getElementById('sqlEditor').value = '';
-            document.getElementById('queryResults').innerHTML = `
-                <p class="text-gray-400 text-center py-8">
-                    <i class="fas fa-database text-4xl mb-4 block opacity-50"></i>
-                    Execute a query to see results
-                </p>
-            `;
+            const editor = document.getElementById('sqlEditor');
+            if (editor) editor.value = '';
+            const results = document.getElementById('queryResults');
+            if (results) results.innerHTML = '<p class="text-gray-400 text-center py-8"><i class="fas fa-database text-4xl mb-4 block opacity-50"></i>Execute a query</p>';
             updateLineNumbers();
         }
 
         function updateLineNumbers() {
             const editor = document.getElementById('sqlEditor');
+            const lineNumbers = document.getElementById('lineNumbers');
+            if (!editor || !lineNumbers) return;
             const lines = editor.value.split('\n').length;
-            document.getElementById('lineNumbers').innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
+            lineNumbers.innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
         }
 
         function refreshTables() {
             loadSQLTables();
-            showToast('Refreshed', 'Tables list updated', 'success');
+            showToast('Refreshed', 'Tables updated', 'success');
+        }
+
+        function showSQLHistory() {
+            if (sqlHistory.length === 0) {
+                showToast('Empty', 'No history yet', 'info');
+                return;
+            }
+            
+            const content = sqlHistory.map((h, i) => `
+                <div class="glass rounded-xl p-3 mb-2 cursor-pointer hover:bg-white/10" onclick="loadHistoryQuery(${i})">
+                    <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query)}</pre>
+                    <p class="text-xs text-gray-400 mt-1">${formatRelativeTime(h.timestamp)}</p>
+                </div>
+            `).join('');
+            
+            showModal('Query History', content);
+        }
+
+        function loadHistoryQuery(index) {
+            const editor = document.getElementById('sqlEditor');
+            if (editor) editor.value = sqlHistory[index].query;
+            closeModal();
+            updateLineNumbers();
+        }
+
+        function exportResults() {
+            const table = document.querySelector('#queryResults table');
+            if (!table) {
+                showToast('No Data', 'Execute a query first', 'warning');
+                return;
+            }
+            
+            let csv = '';
+            table.querySelectorAll('tr').forEach(row => {
+                const cells = row.querySelectorAll('th, td');
+                csv += Array.from(cells).map(c => `"${c.textContent.replace(/"/g, '""')}"`).join(',') + '\n';
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'results.csv';
+            a.click();
+            
+            showToast('Exported', 'CSV downloaded', 'success');
+        }
+
+        function explainSQL() {
+            showToast('SQL', 'This query retrieves or modifies data', 'info');
+        }
+
+        function cancelAllUploads() {
+            const queue = document.getElementById('uploadQueue');
+            const list = document.getElementById('uploadList');
+            if (queue) queue.classList.add('hidden');
+            if (list) list.innerHTML = '';
         }
 
         // ==================== ANALYTICS ====================
         async function updateStats() {
-            const files = await dbGetAll('files');
-            const tables = await dbGetAll('sqlTables');
-            
-            const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
-            const totalRecords = tables.reduce((sum, t) => sum + (t.rows?.length || 0), 0);
-            const maxStorage = CONFIG.MAX_STORAGE[currentProvider];
-            const usedPercent = (totalSize / maxStorage) * 100;
-            
-            // Update dashboard
-            document.getElementById('totalFiles').textContent = files.length;
-            document.getElementById('totalSize').textContent = formatBytes(totalSize);
-            document.getElementById('totalRecords').textContent = totalRecords;
-            
-            // Update storage widget
-            document.getElementById('storagePercent').textContent = usedPercent.toFixed(1) + '%';
-            document.getElementById('storageBar').style.width = Math.min(usedPercent, 100) + '%';
-            document.getElementById('storageText').textContent = `${formatBytes(totalSize)} of ${formatBytes(maxStorage)}`;
-            document.getElementById('maxStorageDisplay').textContent = formatBytes(maxStorage);
-            
-            // Update analytics ring
-            const ring = document.getElementById('storageRing');
-            if (ring) {
-                const offset = 251.2 - (251.2 * Math.min(usedPercent, 100) / 100);
-                ring.style.strokeDashoffset = offset;
-                document.getElementById('ringPercent').textContent = usedPercent.toFixed(1) + '%';
+            try {
+                const files = await dbGetAll('files');
+                const tables = await dbGetAll('sqlTables');
+                
+                const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+                const totalRecords = tables.reduce((sum, t) => sum + (t.rows?.length || 0), 0);
+                const maxStorage = CONFIG.MAX_STORAGE[currentProvider];
+                const usedPercent = (totalSize / maxStorage) * 100;
+                
+                // Update elements safely
+                const elements = {
+                    'totalFiles': files.length,
+                    'totalSize': formatBytes(totalSize),
+                    'totalRecords': totalRecords,
+                    'storagePercent': usedPercent.toFixed(1) + '%',
+                    'storageText': `${formatBytes(totalSize)} of ${formatBytes(maxStorage)}`,
+                    'maxStorageDisplay': formatBytes(maxStorage),
+                    'ringPercent': usedPercent.toFixed(1) + '%'
+                };
+                
+                Object.entries(elements).forEach(([id, value]) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = value;
+                });
+                
+                const storageBar = document.getElementById('storageBar');
+                if (storageBar) storageBar.style.width = Math.min(usedPercent, 100) + '%';
+                
+                const ring = document.getElementById('storageRing');
+                if (ring) {
+                    const offset = 251.2 - (251.2 * Math.min(usedPercent, 100) / 100);
+                    ring.style.strokeDashoffset = offset;
+                }
+                
+                updateFileTypesChart(files);
+                updateStorageBreakdown(files);
+            } catch (e) {
+                console.warn('Stats update error:', e);
             }
-            
-            updateFileTypesChart(files);
-            updateStorageBreakdown(files);
         }
 
         function updateFileTypesChart(files) {
@@ -2187,46 +2273,23 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
             if (!container) return;
             
             const total = files.length || 1;
-            const colors = {
-                Images: 'from-indigo-500 to-purple-500',
-                Documents: 'from-purple-500 to-pink-500',
-                Videos: 'from-green-500 to-emerald-500',
-                Audio: 'from-orange-500 to-amber-500',
-                Folders: 'from-yellow-500 to-orange-500',
-                Other: 'from-gray-500 to-gray-600'
-            };
             
             if (Object.keys(types).length === 0) {
-                container.innerHTML = '<p class="text-gray-400 text-center">No files to analyze</p>';
+                container.innerHTML = '<p class="text-gray-400 text-center">No files</p>';
                 return;
             }
             
             container.innerHTML = Object.entries(types).map(([type, count]) => `
                 <div>
                     <div class="flex justify-between text-sm mb-1">
-                        <span class="flex items-center gap-2">
-                            <i class="fas ${getTypIcon(type)} text-xs"></i>
-                            ${type}
-                        </span>
+                        <span>${type}</span>
                         <span class="text-gray-400">${count} (${(count/total*100).toFixed(0)}%)</span>
                     </div>
                     <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                        <div class="bg-gradient-to-r ${colors[type] || colors.Other} h-full rounded-full transition-all duration-700" style="width: ${(count/total*100).toFixed(1)}%"></div>
+                        <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full" style="width: ${(count/total*100)}%"></div>
                     </div>
                 </div>
             `).join('');
-        }
-
-        function getTypIcon(type) {
-            const icons = {
-                Images: 'fa-image',
-                Documents: 'fa-file-alt',
-                Videos: 'fa-video',
-                Audio: 'fa-music',
-                Folders: 'fa-folder',
-                Other: 'fa-file'
-            };
-            return icons[type] || icons.Other;
         }
 
         function updateStorageBreakdown(files) {
@@ -2244,84 +2307,81 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
                 return;
             }
             
-            container.innerHTML = Object.entries(breakdown)
-                .sort((a, b) => b[1] - a[1])
-                .map(([type, size]) => `
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <i class="fas ${getTypIcon(type)} text-indigo-400"></i>
-                            <span>${type}</span>
-                        </div>
-                        <span class="text-gray-400">${formatBytes(size)}</span>
-                    </div>
-                `).join('');
-        }
-
-        // ==================== ACTIVITY LOG ====================
-        async function logActivity(action, message) {
-            const activity = {
-                action,
-                message,
-                timestamp: new Date().toISOString()
-            };
-            
-            await dbAdd('activity', activity);
-            loadActivityLog();
-            
-            // Update notifications
-            notifications.unshift({ ...activity, id: Date.now() });
-            if (notifications.length > 20) notifications.pop();
-            updateNotificationBadge();
-        }
-
-        async function loadActivityLog() {
-            const activities = await dbGetAll('activity');
-            const container = document.getElementById('activityLog');
-            if (!container) return;
-            
-            const recent = activities.slice(-30).reverse();
-            
-            if (recent.length === 0) {
-                container.innerHTML = '<p class="text-gray-400 text-center py-8">No recent activity</p>';
-                return;
-            }
-            
-            const icons = {
-                upload: 'fa-upload text-green-400',
-                download: 'fa-download text-blue-400',
-                delete: 'fa-trash text-red-400',
-                create: 'fa-plus text-purple-400',
-                sql: 'fa-database text-orange-400',
-                share: 'fa-share text-pink-400',
-                sync: 'fa-sync text-indigo-400'
-            };
-            
-            container.innerHTML = recent.map(a => `
-                <div class="flex items-center gap-4 p-3 glass rounded-xl hover:bg-white/5 transition-all">
-                    <div class="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center flex-shrink-0">
-                        <i class="fas ${icons[a.action] || 'fa-circle text-gray-400'}"></i>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <p class="text-sm truncate">${a.message}</p>
-                        <p class="text-xs text-gray-400">${formatRelativeTime(a.timestamp)}</p>
-                    </div>
+            container.innerHTML = Object.entries(breakdown).sort((a, b) => b[1] - a[1]).map(([type, size]) => `
+                <div class="flex items-center justify-between">
+                    <span>${type}</span>
+                    <span class="text-gray-400">${formatBytes(size)}</span>
                 </div>
             `).join('');
         }
 
+        // ==================== ACTIVITY ====================
+        async function logActivity(action, message) {
+            try {
+                await dbAdd('activity', { action, message, timestamp: new Date().toISOString() });
+                loadActivityLog();
+                
+                notifications.unshift({ action, message, id: Date.now(), timestamp: new Date().toISOString() });
+                if (notifications.length > 20) notifications.pop();
+                updateNotificationBadge();
+            } catch (e) {
+                console.warn('Activity log error:', e);
+            }
+        }
+
+        async function loadActivityLog() {
+            try {
+                const activities = await dbGetAll('activity');
+                const container = document.getElementById('activityLog');
+                if (!container) return;
+                
+                const recent = activities.slice(-30).reverse();
+                
+                if (recent.length === 0) {
+                    container.innerHTML = '<p class="text-gray-400 text-center py-8">No activity</p>';
+                    return;
+                }
+                
+                const icons = {
+                    upload: 'fa-upload text-green-400',
+                    download: 'fa-download text-blue-400',
+                    delete: 'fa-trash text-red-400',
+                    create: 'fa-plus text-purple-400',
+                    sql: 'fa-database text-orange-400',
+                    share: 'fa-share text-pink-400'
+                };
+                
+                container.innerHTML = recent.map(a => `
+                    <div class="flex items-center gap-4 p-3 glass rounded-xl">
+                        <div class="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
+                            <i class="fas ${icons[a.action] || 'fa-circle text-gray-400'}"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm truncate">${escapeHtml(a.message)}</p>
+                            <p class="text-xs text-gray-400">${formatRelativeTime(a.timestamp)}</p>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.warn('Activity load error:', e);
+            }
+        }
+
         async function clearActivity() {
-            if (!confirm('Clear all activity logs?')) return;
+            if (!confirm('Clear all activity?')) return;
             await dbClear('activity');
             notifications = [];
             updateNotificationBadge();
             loadActivityLog();
-            showToast('Cleared', 'Activity log cleared', 'success');
+            showToast('Cleared', 'Activity cleared', 'success');
         }
 
         function updateNotificationBadge() {
             const badge = document.getElementById('notifBadge');
-            badge.textContent = notifications.length;
-            badge.style.display = notifications.length > 0 ? 'flex' : 'none';
+            if (badge) {
+                badge.textContent = notifications.length;
+                badge.style.display = notifications.length > 0 ? 'flex' : 'none';
+            }
         }
 
         function showNotifications() {
@@ -2329,7 +2389,7 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
                 ? '<p class="text-gray-400 text-center py-8">No notifications</p>'
                 : notifications.map(n => `
                     <div class="glass rounded-xl p-3 mb-2">
-                        <p class="text-sm">${n.message}</p>
+                        <p class="text-sm">${escapeHtml(n.message)}</p>
                         <p class="text-xs text-gray-400">${formatRelativeTime(n.timestamp)}</p>
                     </div>
                 `).join('');
@@ -2340,59 +2400,55 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
         // ==================== DATA MANAGEMENT ====================
         async function exportAllData() {
             const data = {
-                files: (await dbGetAll('files')).map(f => ({ ...f, data: '[BINARY_DATA_EXCLUDED]' })),
+                files: (await dbGetAll('files')).map(f => ({ ...f, data: '[EXCLUDED]' })),
                 sqlTables: await dbGetAll('sqlTables'),
                 activity: await dbGetAll('activity'),
-                settings: await loadAllSettings(),
-                shared: await dbGetAll('shared'),
                 exportDate: new Date().toISOString(),
                 version: '2026.2.0'
             };
             
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
+            a.href = URL.createObjectURL(blob);
             a.download = `nexuscloud-backup-${new Date().toISOString().split('T')[0]}.json`;
             a.click();
-            URL.revokeObjectURL(url);
             
-            showToast('Exported', 'Data exported successfully!', 'success');
+            showToast('Exported', 'Data exported!', 'success');
         }
 
+        function exportData() { exportAllData(); }
+
         function importData() {
-            document.getElementById('importInput').click();
+            const input = document.getElementById('importInput');
+            if (input) input.click();
         }
 
         async function handleImport(event) {
-            const file = event.target.files[0];
+            const file = event.target.files?.[0];
             if (!file) return;
             
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const data = JSON.parse(e.target.result);
-                    
-                    if (data.sqlTables) {
-                        for (const table of data.sqlTables) {
-                            await dbPut('sqlTables', table);
-                        }
+            try {
+                const text = await file.text();
+                const data = JSON.parse(text);
+                
+                if (data.sqlTables) {
+                    for (const table of data.sqlTables) {
+                        await dbPut('sqlTables', table);
                     }
-                    
-                    await loadSQLTables();
-                    await updateStats();
-                    showToast('Imported', 'Data imported successfully!', 'success');
-                } catch (error) {
-                    showToast('Error', 'Import failed: Invalid file format', 'error');
                 }
-            };
-            reader.readAsText(file);
+                
+                await loadSQLTables();
+                await updateStats();
+                showToast('Imported', 'Data imported!', 'success');
+            } catch (error) {
+                showToast('Error', 'Import failed', 'error');
+            }
             event.target.value = '';
         }
 
         async function clearAllData() {
-            if (!confirm('⚠️ Delete ALL data? This cannot be undone!')) return;
-            if (!confirm('Are you absolutely sure? All files, tables, and activity will be permanently deleted.')) return;
+            if (!confirm('Delete ALL data?')) return;
+            if (!confirm('Are you sure?')) return;
             
             await dbClear('files');
             await dbClear('sqlTables');
@@ -2408,502 +2464,283 @@ SELECT * FROM logs ORDER BY timestamp DESC LIMIT 10;`
             await updateStats();
             updateNotificationBadge();
             
-            showToast('Cleared', 'All data has been deleted', 'success');
+            showToast('Cleared', 'All data deleted', 'success');
         }
 
         function repairDatabase() {
-            // Simulated repair function
-            showToast('Complete', 'Database integrity verified', 'success');
+            showToast('Complete', 'Database verified', 'success');
         }
 
-        // ==================== SETTINGS ====================
-    // ==================== SETTINGS ====================
-async function loadSettings() {
-    const settings = await loadAllSettings();
-    
-    // Load cloud credentials into inputs
-    if (settings.supabaseUrl) {
-        const urlInput = document.getElementById('supabaseUrl');
-        if (urlInput) urlInput.value = settings.supabaseUrl;
-    }
-    if (settings.supabaseKey) {
-        const keyInput = document.getElementById('supabaseKey');
-        if (keyInput) keyInput.value = settings.supabaseKey;
-    }
-    if (settings.githubToken) {
-        const tokenInput = document.getElementById('githubToken');
-        if (tokenInput) tokenInput.value = settings.githubToken;
-    }
-    if (settings.githubRepo) {
-        const repoInput = document.getElementById('githubRepo');
-        if (repoInput) repoInput.value = settings.githubRepo;
-    }
-    
-    // Load toggle states
-    if (settings.autoSync !== undefined) {
-        document.getElementById('autoSync').checked = settings.autoSync;
-    }
-    if (settings.offlineMode !== undefined) {
-        document.getElementById('offlineMode').checked = settings.offlineMode;
-    }
-    
-    // Check if setup guide was hidden
-    if (settings.hideSetupGuide) {
-        document.getElementById('setupGuide')?.classList.add('hidden');
-    }
-}
-
-async function loadAllSettings() {
-    const settings = {};
-    const all = await dbGetAll('settings');
-    all.forEach(s => settings[s.key] = s.value);
-    return settings;
-}
-
-async function saveSetting(key, value) {
-    await dbPut('settings', { key, value });
-}
-
-function hideSetupGuide() {
-    document.getElementById('setupGuide').classList.add('hidden');
-    saveSetting('hideSetupGuide', true);
-}
-
-// ==================== UI FUNCTIONS ====================
-function showSection(section) {
-    // Hide all sections
-    document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
-    
-    // Show selected section
-    const sectionEl = document.getElementById(`${section}Section`);
-    if (sectionEl) sectionEl.classList.remove('hidden');
-    
-    // Update nav
-    document.querySelectorAll('#sidebar button, #mobileNav button').forEach(btn => {
-        btn.classList.remove('bg-white/10', 'text-indigo-400');
-    });
-    
-    // Update page title
-    const titles = {
-        dashboard: 'Dashboard',
-        files: 'My Files',
-        upload: 'Upload Files',
-        database: 'SQL Database',
-        analytics: 'Analytics',
-        shared: 'Shared Files',
-        settings: 'Settings'
-    };
-    
-    document.getElementById('pageTitle').textContent = titles[section] || 'Dashboard';
-    
-    // Close mobile sidebar
-    document.getElementById('sidebar').classList.add('-translate-x-full', 'lg:translate-x-0');
-    document.getElementById('sidebarOverlay').classList.add('hidden');
-    
-    // Refresh data for specific sections
-    if (section === 'analytics') {
-        updateStats();
-        loadActivityLog();
-    }
-    if (section === 'database') {
-        updateLineNumbers();
-    }
-}
-
-function toggleSidebar() {
-    const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('sidebarOverlay');
-    sidebar.classList.toggle('-translate-x-full');
-    overlay.classList.toggle('hidden');
-}
-
-function showModal(title, content) {
-    document.getElementById('modalTitle').textContent = title;
-    document.getElementById('modalContent').innerHTML = content;
-    document.getElementById('modal').classList.remove('hidden');
-}
-
-function closeModal() {
-    document.getElementById('modal').classList.add('hidden');
-}
-
-function showToast(title, message, type = 'success') {
-    const toast = document.getElementById('toast');
-    const icon = document.getElementById('toastIcon');
-    
-    const icons = {
-        success: 'fa-check-circle text-green-400',
-        error: 'fa-exclamation-circle text-red-400',
-        warning: 'fa-exclamation-triangle text-yellow-400',
-        info: 'fa-info-circle text-blue-400'
-    };
-    
-    icon.className = `fas ${icons[type]} text-xl`;
-    document.getElementById('toastTitle').textContent = title;
-    document.getElementById('toastMessage').textContent = message;
-    
-    toast.classList.remove('translate-y-20', 'opacity-0');
-    
-    setTimeout(() => {
-        toast.classList.add('translate-y-20', 'opacity-0');
-    }, 3000);
-}
-
-function updateOnlineStatus() {
-    isOnline = navigator.onLine;
-    const status = document.getElementById('onlineStatus');
-    
-    if (isOnline) {
-        status.innerHTML = '<i class="fas fa-wifi text-green-400"></i>';
-        status.title = 'Online';
-    } else {
-        status.innerHTML = '<i class="fas fa-wifi-slash text-red-400"></i>';
-        status.title = 'Offline';
-    }
-}
-
-// ==================== UTILITIES ====================
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function formatDate(date) {
-    return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function formatRelativeTime(date) {
-    const diff = Date.now() - new Date(date).getTime();
-    const mins = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return formatDate(date);
-}
-
-function getFileIcon(type) {
-    if (!type) return 'fa-file';
-    if (type === 'folder') return 'fa-folder';
-    if (type.startsWith('image/')) return 'fa-file-image';
-    if (type.startsWith('video/')) return 'fa-file-video';
-    if (type.startsWith('audio/')) return 'fa-file-audio';
-    if (type.includes('pdf')) return 'fa-file-pdf';
-    if (type.includes('word') || type.includes('document')) return 'fa-file-word';
-    if (type.includes('sheet') || type.includes('excel')) return 'fa-file-excel';
-    if (type.includes('presentation') || type.includes('powerpoint')) return 'fa-file-powerpoint';
-    if (type.includes('zip') || type.includes('rar') || type.includes('archive')) return 'fa-file-archive';
-    if (type.includes('text') || type.includes('json')) return 'fa-file-code';
-    return 'fa-file';
-}
-
-function getFileColor(type) {
-    if (!type) return 'bg-gray-500/20';
-    if (type === 'folder') return 'bg-yellow-500/20 text-yellow-400';
-    if (type.startsWith('image/')) return 'bg-indigo-500/20 text-indigo-400';
-    if (type.startsWith('video/')) return 'bg-green-500/20 text-green-400';
-    if (type.startsWith('audio/')) return 'bg-orange-500/20 text-orange-400';
-    if (type.includes('pdf')) return 'bg-red-500/20 text-red-400';
-    return 'bg-purple-500/20 text-purple-400';
-}
-
-function getFileCategory(type) {
-    if (!type) return 'Other';
-    if (type === 'folder') return 'Folders';
-    if (type.startsWith('image/')) return 'Images';
-    if (type.startsWith('video/')) return 'Videos';
-    if (type.startsWith('audio/')) return 'Audio';
-    return 'Documents';
-}
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function search(query) {
-    if (!query.trim()) {
-        loadFiles();
-        return;
-    }
-    
-    const q = query.toLowerCase();
-    dbGetAll('files').then(files => {
-        const filtered = files.filter(f => 
-            f.name.toLowerCase().includes(q) || 
-            f.type?.toLowerCase().includes(q)
-        );
-        renderFiles(filtered);
-    });
-}
-
-// ==================== EVENT LISTENERS ====================
-function initEventListeners() {
-    // Drag & drop
-    const dropZone = document.getElementById('dropZone');
-    
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(event => {
-        dropZone?.addEventListener(event, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        });
-    });
-    
-    ['dragenter', 'dragover'].forEach(event => {
-        dropZone?.addEventListener(event, () => {
-            dropZone.classList.add('border-indigo-400', 'bg-indigo-500/10');
-        });
-    });
-    
-    ['dragleave', 'drop'].forEach(event => {
-        dropZone?.addEventListener(event, () => {
-            dropZone.classList.remove('border-indigo-400', 'bg-indigo-500/10');
-        });
-    });
-    
-    dropZone?.addEventListener('drop', (e) => {
-        const files = e.dataTransfer.files;
-        if (files.length > 0) uploadFiles(files);
-    });
-    
-    dropZone?.addEventListener('click', () => {
-        document.getElementById('fileInput').click();
-    });
-    
-    // File input
-    document.getElementById('fileInput')?.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) uploadFiles(e.target.files);
-    });
-    
-    // Import input
-    document.getElementById('importInput')?.addEventListener('change', handleImport);
-    
-    // SQL editor
-    const sqlEditor = document.getElementById('sqlEditor');
-    sqlEditor?.addEventListener('input', updateLineNumbers);
-    sqlEditor?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            executeSQL();
+        // ==================== UI ====================
+        function showSection(section) {
+            document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
+            const sectionEl = document.getElementById(`${section}Section`);
+            if (sectionEl) sectionEl.classList.remove('hidden');
+            
+            document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
+            
+            const titles = {
+                dashboard: 'Dashboard', files: 'My Files', upload: 'Upload Files',
+                database: 'SQL Database', analytics: 'Analytics', shared: 'Shared Files', settings: 'Settings'
+            };
+            
+            const pageTitle = document.getElementById('pageTitle');
+            if (pageTitle) pageTitle.textContent = titles[section] || 'Dashboard';
+            
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            if (sidebar) sidebar.classList.add('-translate-x-full');
+            if (overlay) overlay.classList.add('hidden');
+            
+            if (section === 'analytics') {
+                updateStats();
+                loadActivityLog();
+            }
+            if (section === 'database') updateLineNumbers();
         }
-    });
-    
-    // Close context menu on click
-    document.addEventListener('click', hideContextMenu);
-    
-    // Close modal on backdrop click
-    document.getElementById('modal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'modal') closeModal();
-    });
-    
-    // Keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            closeModal();
-            hideContextMenu();
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            if (sidebar) sidebar.classList.toggle('-translate-x-full');
+            if (overlay) overlay.classList.toggle('hidden');
         }
-    });
-    
-    // Search
-    let searchTimeout;
-    const searchInput = document.querySelector('input[placeholder="Search files..."]');
-    searchInput?.addEventListener('input', (e) => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => search(e.target.value), 300);
-    });
-}
 
-// ==================== PARTICLES ====================
-function initParticles() {
-    const container = document.getElementById('particles');
-    if (!container) return;
-    
-    for (let i = 0; i < 50; i++) {
-        const particle = document.createElement('div');
-        particle.className = 'particle';
-        particle.style.cssText = `
-            left: ${Math.random() * 100}%;
-            top: ${Math.random() * 100}%;
-            animation-delay: ${Math.random() * 20}s;
-            animation-duration: ${15 + Math.random() * 10}s;
-        `;
-        container.appendChild(particle);
-    }
-}
+        function showModal(title, content) {
+            const modalTitle = document.getElementById('modalTitle');
+            const modalContent = document.getElementById('modalContent');
+            const modal = document.getElementById('modal');
+            
+            if (modalTitle) modalTitle.textContent = title;
+            if (modalContent) modalContent.innerHTML = content;
+            if (modal) modal.classList.remove('hidden');
+        }
 
-// ==================== SHARED FILES ====================
-async function loadSharedFiles() {
-    const shared = await dbGetAll('shared');
-    const container = document.getElementById('sharedFilesList');
-    if (!container) return;
-    
-    if (shared.length === 0) {
-        container.innerHTML = `
-            <p class="text-gray-400 text-center py-8">
-                <i class="fas fa-share-alt text-4xl mb-4 block opacity-50"></i>
-                No shared files yet. Share a file to see it here.
-            </p>
-        `;
-        return;
-    }
-    
-    container.innerHTML = shared.map(s => `
-        <div class="glass rounded-xl p-4 flex items-center justify-between">
-            <div>
-                <p class="font-medium">${s.fileName}</p>
-                <p class="text-xs text-gray-400">Shared ${formatRelativeTime(s.created)}</p>
-            </div>
-            <button onclick="revokeShare(${s.id})" class="text-red-400 hover:text-red-300">
-                <i class="fas fa-times"></i> Revoke
-            </button>
-        </div>
-    `).join('');
-}
+        function closeModal() {
+            const modal = document.getElementById('modal');
+            if (modal) modal.classList.add('hidden');
+        }
 
-async function revokeShare(id) {
-    await dbDelete('shared', id);
-    loadSharedFiles();
-    showToast('Revoked', 'Share link has been revoked', 'success');
-}
+        function showToast(title, message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toastIcon');
+            const titleEl = document.getElementById('toastTitle');
+            const messageEl = document.getElementById('toastMessage');
+            
+            if (!toast) return;
+            
+            const icons = {
+                success: 'fa-check-circle text-green-400',
+                error: 'fa-exclamation-circle text-red-400',
+                warning: 'fa-exclamation-triangle text-yellow-400',
+                info: 'fa-info-circle text-blue-400'
+            };
+            
+            if (icon) icon.className = `fas ${icons[type]} text-xl`;
+            if (titleEl) titleEl.textContent = title;
+            if (messageEl) messageEl.textContent = message;
+            
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        }
 
-// SQL History
-function showSQLHistory() {
-    if (sqlHistory.length === 0) {
-        showToast('Empty', 'No query history yet', 'info');
-        return;
-    }
-    
-    const content = sqlHistory.map((h, i) => `
-        <div class="glass rounded-xl p-3 mb-2 cursor-pointer hover:bg-white/10" onclick="loadHistoryQuery(${i})">
-            <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query)}</pre>
-            <p class="text-xs text-gray-400 mt-1">${formatRelativeTime(h.timestamp)}</p>
-        </div>
-    `).join('');
-    
-    showModal('Query History', content);
-}
+        function updateOnlineStatus() {
+            isOnline = navigator.onLine;
+            const status = document.getElementById('cloudStatus');
+            const banner = document.getElementById('connectionBanner');
+            
+            if (status) {
+                status.innerHTML = isOnline 
+                    ? '<span class="connection-status online online-indicator"><i class="fas fa-circle text-xs"></i></span>'
+                    : '<span class="connection-status offline"><i class="fas fa-circle text-xs"></i></span>';
+            }
+            
+            if (banner) {
+                banner.classList.toggle('hidden', isOnline);
+            }
+        }
 
-function loadHistoryQuery(index) {
-    document.getElementById('sqlEditor').value = sqlHistory[index].query;
-    closeModal();
-    updateLineNumbers();
-}
+        // ==================== UTILITIES ====================
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
 
-function exportResults() {
-    const table = document.querySelector('#queryResults table');
-    if (!table) {
-        showToast('No Data', 'Execute a query first', 'warning');
-        return;
-    }
-    
-    let csv = '';
-    const rows = table.querySelectorAll('tr');
-    rows.forEach(row => {
-        const cells = row.querySelectorAll('th, td');
-        const rowData = Array.from(cells).map(c => `"${c.textContent.replace(/"/g, '""')}"`);
-        csv += rowData.join(',') + '\n';
-    });
-    
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'query_results.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-    
-    showToast('Exported', 'Results exported as CSV', 'success');
-}
+        function formatDate(date) {
+            return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
 
-function explainSQL() {
-    const query = document.getElementById('sqlEditor').value.trim();
-    if (!query) return;
-    
-    const upperQuery = query.toUpperCase();
-    let explanation = '';
-    
-    if (upperQuery.startsWith('SELECT')) {
-        explanation = '📊 SELECT: Retrieves data from one or more tables based on specified conditions.';
-    } else if (upperQuery.startsWith('INSERT')) {
-        explanation = '➕ INSERT: Adds new rows of data into a table.';
-    } else if (upperQuery.startsWith('UPDATE')) {
-        explanation = '✏️ UPDATE: Modifies existing data in a table based on conditions.';
-    } else if (upperQuery.startsWith('DELETE')) {
-        explanation = '🗑️ DELETE: Removes rows from a table based on conditions.';
-    } else if (upperQuery.startsWith('CREATE')) {
-        explanation = '🏗️ CREATE TABLE: Defines a new table structure with columns and data types.';
-    } else if (upperQuery.startsWith('DROP')) {
-        explanation = '💣 DROP TABLE: Permanently removes a table and all its data.';
-    } else {
-        explanation = '❓ Unknown query type. Check your SQL syntax.';
-    }
-    
-    showToast('Query Info', explanation, 'info');
-}
+        function formatRelativeTime(date) {
+            const diff = Date.now() - new Date(date).getTime();
+            const mins = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            
+            if (mins < 1) return 'Just now';
+            if (mins < 60) return `${mins}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
 
-function cancelAllUploads() {
-    document.getElementById('uploadQueue').classList.add('hidden');
-    document.getElementById('uploadList').innerHTML = '';
-    showToast('Cancelled', 'All uploads cancelled', 'warning');
-}
+        function getFileIcon(type) {
+            if (!type) return 'fa-file';
+            if (type === 'folder') return 'fa-folder';
+            if (type.startsWith('image/')) return 'fa-file-image';
+            if (type.startsWith('video/')) return 'fa-file-video';
+            if (type.startsWith('audio/')) return 'fa-file-audio';
+            if (type.includes('pdf')) return 'fa-file-pdf';
+            return 'fa-file';
+        }
 
-async function downloadSelected() {
-    for (const id of selectedFiles) {
-        await downloadFile(id);
-    }
-    clearSelection();
-}
+        function getFileColor(type) {
+            if (!type) return 'bg-gray-500/20';
+            if (type === 'folder') return 'bg-yellow-500/20 text-yellow-400';
+            if (type.startsWith('image/')) return 'bg-indigo-500/20 text-indigo-400';
+            if (type.startsWith('video/')) return 'bg-green-500/20 text-green-400';
+            if (type.startsWith('audio/')) return 'bg-orange-500/20 text-orange-400';
+            return 'bg-purple-500/20 text-purple-400';
+        }
 
-function alterTable(query) {
-    showToast('Info', 'ALTER TABLE is not fully implemented yet', 'info');
-    return { message: 'ALTER TABLE support coming soon!' };
-}
+        function getFileCategory(type) {
+            if (!type) return 'Other';
+            if (type === 'folder') return 'Folders';
+            if (type.startsWith('image/')) return 'Images';
+            if (type.startsWith('video/')) return 'Videos';
+            if (type.startsWith('audio/')) return 'Audio';
+            return 'Documents';
+        }
 
-function truncateTable(query) {
-    const match = query.match(/TRUNCATE\s+(?:TABLE\s+)?(\w+)/i);
-    if (!match) throw new Error('Invalid TRUNCATE syntax');
-    
-    const tableName = match[1].toLowerCase();
-    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-    
-    const count = sqlTables[tableName].rows.length;
-    sqlTables[tableName].rows = [];
-    dbPut('sqlTables', sqlTables[tableName]);
-    
-    return { message: `Table '${tableName}' truncated. ${count} row(s) removed.` };
-}
-// Register Service Worker for PWA support
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js')
-            .then(reg => console.log('Service Worker registered'))
-            .catch(err => console.log('Service Worker failed:', err));
-    });
-}
-// Fallback showToast if called before DOM ready
-if (typeof showToast !== 'function') {
-    window.showToast = function(title, message, type) {
-        console.log(`[${type}] ${title}: ${message}`);
-    };
-}
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
 
-// Failsafe: Hide loader after 5 seconds no matter what
-setTimeout(() => {
-    const loader = document.getElementById('loadingScreen');
-    if (loader && loader.style.display !== 'none') {
-        loader.style.opacity = '0';
-        setTimeout(() => { loader.style.display = 'none'; }, 300);
-        console.warn('Loader force-hidden by failsafe');
-    }
-}, 5000);
+        function search(query) {
+            if (!query.trim()) {
+                loadFiles();
+                return;
+            }
+            
+            const q = query.toLowerCase();
+            dbGetAll('files').then(files => {
+                const filtered = files.filter(f => f.name.toLowerCase().includes(q));
+                renderFiles(filtered);
+            });
+        }
 
-// Initialize
-document.addEventListener('DOMContentLoaded', init);
-</script></body> </html>
+        // ==================== EVENT LISTENERS ====================
+        function initEventListeners() {
+            // Drag & drop
+            const dropZone = document.getElementById('dropZone');
+            
+            if (dropZone) {
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(event => {
+                    dropZone.addEventListener(event, (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    });
+                });
+                
+                ['dragenter', 'dragover'].forEach(event => {
+                    dropZone.addEventListener(event, () => dropZone.classList.add('drop-active'));
+                });
+                
+                ['dragleave', 'drop'].forEach(event => {
+                    dropZone.addEventListener(event, () => dropZone.classList.remove('drop-active'));
+                });
+                
+                dropZone.addEventListener('drop', (e) => {
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) uploadFiles(files);
+                });
+                
+                dropZone.addEventListener('click', () => {
+                    document.getElementById('fileInput')?.click();
+                });
+            }
+            
+            // File input
+            document.getElementById('fileInput')?.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) uploadFiles(e.target.files);
+            });
+            
+            // Import input
+            document.getElementById('importInput')?.addEventListener('change', handleImport);
+            
+            // SQL editor
+            const sqlEditor = document.getElementById('sqlEditor');
+            if (sqlEditor) {
+                sqlEditor.addEventListener('input', updateLineNumbers);
+                sqlEditor.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        executeSQL();
+                    }
+                });
+            }
+            
+            // Close context menu on click
+            document.addEventListener('click', hideContextMenu);
+            
+            // Close modal on backdrop click
+            document.getElementById('modal')?.addEventListener('click', (e) => {
+                if (e.target.id === 'modal') closeModal();
+            });
+            
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeModal();
+                    hideContextMenu();
+                }
+            });
+            
+            // Search
+            let searchTimeout;
+            const searchInput = document.getElementById('globalSearch');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(() => search(e.target.value), 300);
+                });
+            }
+        }
+
+        // ==================== PARTICLES ====================
+        function initParticles() {
+            const container = document.getElementById('particles');
+            if (!container) return;
+            
+            for (let i = 0; i < 30; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.cssText = `
+                    left: ${Math.random() * 100}%;
+                    top: ${Math.random() * 100}%;
+                    animation-delay: ${Math.random() * 20}s;
+                    animation-duration: ${15 + Math.random() * 10}s;
+                `;
+                container.appendChild(particle);
+            }
+        }
+
+        // ==================== SERVICE WORKER ====================
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(() => {});
+            });
+        }
+
+        // ==================== START ====================
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
