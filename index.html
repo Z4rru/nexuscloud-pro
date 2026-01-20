@@ -1153,8 +1153,18 @@ function initSupabase() {
             supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
             
             // Test connection by checking storage
-            const { data, error } = await supabaseClient.storage.listBuckets();
+            const { data: buckets, error } = await supabaseClient.storage.listBuckets();
             if (error) throw error;
+            
+            // Check if our bucket exists
+            const bucketExists = buckets?.some(b => b.name === CONFIG.STORAGE_BUCKET);
+            if (!bucketExists) {
+                console.warn(`⚠️ Bucket '${CONFIG.STORAGE_BUCKET}' not found. Files will be stored locally only.`);
+                console.log('To enable cloud storage, create a bucket named "nexus-files" in your Supabase dashboard.');
+                showToast('Warning', 'Cloud bucket not found. Using local storage.', 'warning');
+            } else {
+                console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' found`);
+            }
             
             currentProvider = 'supabase';
             
@@ -1684,8 +1694,17 @@ async function syncFromCloud() {
             let synced = false;
             
             // Upload to cloud first if connected
+            // Upload to cloud first if connected
             if (supabaseClient && isOnline && currentProvider === 'supabase') {
                 try {
+                    // First verify bucket exists
+                    const { data: buckets } = await supabaseClient.storage.listBuckets();
+                    const bucketExists = buckets?.some(b => b.name === CONFIG.STORAGE_BUCKET);
+                    
+                    if (!bucketExists) {
+                        throw new Error(`Bucket '${CONFIG.STORAGE_BUCKET}' not found. Create it in Supabase Dashboard → Storage.`);
+                    }
+                    
                     const filePath = `${currentFolder || 'root'}/${fileId}_${file.name}`;
                     
                     const { data: uploadData, error: uploadError } = await supabaseClient.storage
@@ -1719,39 +1738,40 @@ async function syncFromCloud() {
             // Read file for local storage (and as fallback)
             const fileData = await readFileAsDataURL(file, uploadItem);
             
-            const fileRecord = {
+           const fileRecord = {
     id: fileId,
     name: file.name,
     type: file.type || 'application/octet-stream',
     size: file.size,
-    data: fileData, // Always store local backup for downloads
-    cloudUrl: cloudUrl,
-                cloudPath: synced ? `${currentFolder || 'root'}/${fileId}_${file.name}` : null,
-                folder: currentFolder,
-                created: new Date().toISOString(),
-                modified: new Date().toISOString(),
-                starred: false,
-                synced: synced
-            };
+    data: fileData, // ALWAYS store local backup for downloads
+    cloudUrl: synced ? cloudUrl : null, // Only set if upload actually succeeded
+    cloudPath: synced ? `${currentFolder || 'root'}/${fileId}_${file.name}` : null,
+    cloud_url: synced ? cloudUrl : null, // Snake case for Supabase compatibility
+    cloud_path: synced ? `${currentFolder || 'root'}/${fileId}_${file.name}` : null,
+    folder: currentFolder,
+    created: new Date().toISOString(),
+    modified: new Date().toISOString(),
+    starred: false,
+    synced: synced
+};
             
             // Save metadata to local IndexedDB
             await dbPut('files', fileRecord);
             
-                        // Save metadata to cloud database
-            if (supabaseClient && isOnline) {
-                // Only mark as synced if cloud upload succeeded
+                        // Save metadata to cloud database ONLY if cloud upload succeeded
+            if (supabaseClient && isOnline && synced) {
                 const cloudSyncData = {
                     id: fileId,
                     name: file.name,
                     type: file.type,
                     size: file.size,
-                    cloud_url: cloudUrl || null,
-                    cloud_path: fileRecord.cloudPath || null,
+                    cloud_url: cloudUrl,
+                    cloud_path: fileRecord.cloudPath,
                     folder: currentFolder,
                     created: fileRecord.created,
                     modified: fileRecord.modified,
                     starred: false,
-                    synced: synced
+                    synced: true
                 };
                 
                 console.log('📤 Saving to cloud DB:', { 
@@ -1966,10 +1986,32 @@ async function syncFromCloud() {
             console.error('❌ All download methods failed for file:', file);
             const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
             const hasCloudPath = file.cloudPath || file.cloud_path;
-            if (!hasLocalData && !hasCloudPath) {
-                showToast('Orphan File', 'No data available. Use Settings → Repair Database.', 'warning');
+            const hasCloudUrl = file.cloudUrl || file.cloud_url;
+            
+            let errorMsg = 'Download failed. ';
+            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
+                errorMsg = 'This is an orphan file with no data. ';
+                showToast('Orphan File', errorMsg + 'Go to Settings → Repair Database to clean up.', 'warning');
+            } else if (!isOnline && !hasLocalData) {
+                errorMsg = 'File is cloud-only and you are offline.';
+                showToast('Offline', errorMsg, 'warning');
             } else {
-                showToast('Error', 'Download failed. File may be corrupted.', 'error');
+                errorMsg += 'The file may be corrupted or the storage bucket may not exist.';
+                showToast('Error', errorMsg, 'error');
+            }
+            
+            // Offer to delete the orphan file
+            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
+                if (confirm(`"${file.name}" has no data and cannot be downloaded.\n\nDelete this orphan file record?`)) {
+                    await dbDelete('files', file.id);
+                    if (supabaseClient && isOnline) {
+                        try {
+                            await supabaseClient.from('files').delete().eq('id', file.id);
+                        } catch (e) {}
+                    }
+                    showToast('Deleted', 'Orphan file removed', 'success');
+                    await loadFiles();
+                }
             }
             return;
         }
@@ -2992,49 +3034,99 @@ SELECT * FROM logs;`
             showToast('Cleared', 'All data deleted', 'success');
         }
 
-        async function repairDatabase() {
-            showToast('Scanning', 'Checking for orphan files...', 'info');
+       async function repairDatabase() {
+    showToast('Repairing', 'Checking database integrity...', 'info');
+    
+    try {
+        const files = await dbGetAll('files');
+        let repaired = 0;
+        let orphanFiles = [];
+        
+        for (const file of files) {
+            // Check for completely broken records
+            if (!file.name || !file.created) {
+                await dbDelete('files', file.id);
+                repaired++;
+                continue;
+            }
             
-            try {
-                const files = await dbGetAll('files');
-                const orphanFiles = [];
-                
-                for (const file of files) {
-                    const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
-                    const hasCloudPath = file.cloudPath || file.cloud_path;
-                    const hasCloudUrl = file.cloudUrl || file.cloud_url;
-                    
-                    if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
-                        orphanFiles.push(file);
-                    }
-                }
-                
-                if (orphanFiles.length === 0) {
-                    showToast('Complete', 'All files are valid!', 'success');
-                    return;
-                }
-                
-                const orphanNames = orphanFiles.slice(0, 5).map(f => f.name).join(', ');
-                const deleteOrphans = confirm(
-                    `Found ${orphanFiles.length} orphan file(s) without downloadable data:\n${orphanNames}${orphanFiles.length > 5 ? '...' : ''}\n\nThese files cannot be downloaded. Delete them?`
-                );
-                
-                if (deleteOrphans) {
-                    for (const file of orphanFiles) {
-                        await dbDelete('files', file.id);
-                        if (supabaseClient && isOnline) {
-                            await supabaseClient.from('files').delete().eq('id', file.id).catch(() => {});
-                        }
-                    }
-                    await loadFiles();
-                    await updateStats();
-                    showToast('Cleaned', `Removed ${orphanFiles.length} orphan file(s)`, 'success');
-                }
-            } catch (error) {
-                console.error('Repair error:', error);
-                showToast('Error', 'Repair failed', 'error');
+            // Check for orphan files (no data anywhere)
+            const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
+            const hasCloudPath = file.cloudPath || file.cloud_path;
+            const hasCloudUrl = file.cloudUrl || file.cloud_url;
+            
+            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
+                orphanFiles.push(file);
             }
         }
+        
+        // Ask user what to do with orphan files
+        if (orphanFiles.length > 0) {
+            const deleteOrphans = confirm(
+                `Found ${orphanFiles.length} orphan file(s) with no data:\n\n` +
+                orphanFiles.map(f => `- ${f.name}`).join('\n').substring(0, 500) +
+                `\n\nDelete these orphan records?`
+            );
+            
+            if (deleteOrphans) {
+                for (const orphan of orphanFiles) {
+                    // Delete from local
+                    await dbDelete('files', orphan.id);
+                    
+                    // Delete from cloud database
+                    if (supabaseClient && isOnline) {
+                        try {
+                            await supabaseClient
+                                .from('files')
+                                .delete()
+                                .eq('id', orphan.id);
+                        } catch (e) {
+                            console.warn('Cloud orphan delete error:', e);
+                        }
+                    }
+                    repaired++;
+                }
+            }
+        }
+        
+        // Clean orphaned cloud records (exist in cloud but not locally)
+        if (supabaseClient && isOnline) {
+            try {
+                const { data: cloudFiles, error } = await supabaseClient
+                    .from('files')
+                    .select('id, name');
+                
+                if (!error && cloudFiles) {
+                    for (const cf of cloudFiles) {
+                        const local = await dbGet('files', cf.id);
+                        if (!local) {
+                            try {
+                                await supabaseClient
+                                    .from('files')
+                                    .delete()
+                                    .eq('id', cf.id);
+                                repaired++;
+                                console.log('Removed cloud orphan:', cf.name);
+                            } catch (delErr) {
+                                console.warn('Failed to delete cloud orphan:', delErr);
+                            }
+                        }
+                    }
+                }
+            } catch (cloudErr) {
+                console.warn('Cloud cleanup error:', cloudErr);
+            }
+        }
+        
+        await loadFiles();
+        await updateStats();
+        
+        showToast('Repaired', `Database repaired. ${repaired} issues fixed.`, 'success');
+    } catch (e) {
+        console.error('Repair error:', e);
+        showToast('Error', 'Repair failed: ' + e.message, 'error');
+    }
+}
 
         function showSection(section) {
     // Hide all sections
