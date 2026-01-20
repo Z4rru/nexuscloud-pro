@@ -855,17 +855,20 @@
 
         // ==================== CONFIGURATION ====================
         const CONFIG = {
-            DB_NAME: 'NexusCloudDB',
-            DB_VERSION: 2,
-            MAX_FILE_SIZE: 50 * 1024 * 1024,
-            MAX_STORAGE: {
-                local: 1024 * 1024 * 1024,
-                supabase: 1024 * 1024 * 1024,
-                github: 1024 * 1024 * 1024
-            },
-            SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
-            SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk'
-        };
+    DB_NAME: 'NexusCloudDB',
+    DB_VERSION: 3,
+    MAX_FILE_SIZE: 50 * 1024 * 1024,
+    MAX_STORAGE: {
+        local: 1024 * 1024 * 1024,
+        supabase: 1024 * 1024 * 1024,
+        github: 1024 * 1024 * 1024
+    },
+    SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
+    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk',
+    STORAGE_BUCKET: 'nexus-files',
+    SYNC_INTERVAL: 30000, // 30 seconds
+    USE_CLOUD_PRIMARY: true // Set to true to use cloud as primary storage
+};
 
         // ==================== STATE ====================
                 // ==================== STATE ====================
@@ -1125,27 +1128,113 @@
 
         // ==================== CLOUD PROVIDERS ====================
                      async function tryAutoConnect() {
-            if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
-                try {
-                    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
-                        console.warn('Supabase not available');
-                        return;
-                    }
-                    supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
-                    currentProvider = 'supabase';
-                    var statusEl = document.getElementById('supabaseStatus');
-                    var syncEl = document.getElementById('syncStatus');
-                    if (statusEl) {
-                        statusEl.textContent = 'Connected';
-                        statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
-                    }
-                    if (syncEl) syncEl.textContent = 'Cloud';
-                    console.log('Supabase connected');
-                } catch (e) {
-                    console.warn('Supabase error:', e);
+    if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
+        try {
+            if (typeof window.supabase === 'undefined' || !window.supabase.createClient) {
+                console.warn('Supabase SDK not loaded, loading now...');
+                await loadSupabaseSDK();
+            }
+            
+            supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+            
+            // Test connection by checking storage
+            const { data, error } = await supabaseClient.storage.listBuckets();
+            if (error) throw error;
+            
+            currentProvider = 'supabase';
+            
+            const statusEl = document.getElementById('supabaseStatus');
+            const syncEl = document.getElementById('syncStatus');
+            
+            if (statusEl) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+            }
+            if (syncEl) syncEl.textContent = 'Cloud Sync';
+            
+            console.log('✅ Supabase connected successfully');
+            
+            // Start real-time sync
+            startCloudSync();
+            
+            // Initial sync from cloud
+            await syncFromCloud();
+            
+            return true;
+        } catch (e) {
+            console.warn('Supabase connection error:', e);
+            currentProvider = 'local';
+            return false;
+        }
+    }
+    return false;
+}
+
+function loadSupabaseSDK() {
+    return new Promise((resolve, reject) => {
+        if (window.supabase) { resolve(); return; }
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+}
+
+let syncInterval = null;
+
+function startCloudSync() {
+    if (syncInterval) clearInterval(syncInterval);
+    syncInterval = setInterval(async () => {
+        if (isOnline && currentProvider === 'supabase') {
+            await syncFromCloud();
+        }
+    }, CONFIG.SYNC_INTERVAL);
+    console.log('🔄 Cloud sync started');
+}
+
+async function syncFromCloud() {
+    if (!supabaseClient || !isOnline) return;
+    
+    try {
+        // Fetch file metadata from Supabase database
+        const { data: cloudFiles, error } = await supabaseClient
+            .from('files')
+            .select('*')
+            .order('created', { ascending: false });
+        
+        if (error) throw error;
+        
+        // Update local cache
+        if (cloudFiles && cloudFiles.length > 0) {
+            for (const file of cloudFiles) {
+                const localFile = await dbGet('files', file.id);
+                if (!localFile || new Date(file.modified) > new Date(localFile.modified)) {
+                    await dbPut('files', { ...file, synced: true });
                 }
             }
         }
+        
+        // Fetch SQL tables from cloud
+        const { data: cloudTables, error: tableError } = await supabaseClient
+            .from('sql_tables')
+            .select('*');
+        
+        if (!tableError && cloudTables) {
+            for (const table of cloudTables) {
+                sqlTables[table.name] = table;
+                await dbPut('sqlTables', table);
+            }
+        }
+        
+        await loadFiles();
+        renderTables();
+        console.log('☁️ Synced from cloud');
+        
+    } catch (e) {
+        console.warn('Cloud sync error:', e);
+    }
+}
 
         async function connectSupabase(silent = false) {
             const urlInput = document.getElementById('supabaseUrl');
@@ -1246,51 +1335,91 @@
         }
 
         // ==================== FILE MANAGEMENT ====================
-        async function loadFiles() {
+       async function loadFiles() {
+    try {
+        let files = [];
+        
+        // Try to get files from cloud first (for real-time sync)
+        if (supabaseClient && isOnline && CONFIG.USE_CLOUD_PRIMARY) {
             try {
-                const files = await dbGetAll('files');
-                const filter = document.getElementById('fileFilter')?.value || 'all';
-                const sort = document.getElementById('sortOrder')?.value || 'newest';
+                const { data: cloudFiles, error } = await supabaseClient
+                    .from('files')
+                    .select('*')
+                    .order('created', { ascending: false });
                 
-                let filtered = files.filter(f => f.folder === currentFolder);
-                
-                if (filter !== 'all') {
-                    filtered = filtered.filter(f => {
-                        if (filter === 'folder') return f.type === 'folder';
-                        if (filter === 'image') return f.type?.startsWith('image/');
-                        if (filter === 'video') return f.type?.startsWith('video/');
-                        if (filter === 'audio') return f.type?.startsWith('audio/');
-                        if (filter === 'document') return !f.type?.startsWith('image/') && !f.type?.startsWith('video/') && !f.type?.startsWith('audio/') && f.type !== 'folder';
-                        return true;
-                    });
-                }
-                
-                filtered.sort((a, b) => {
-                    switch (sort) {
-                        case 'oldest': return new Date(a.created) - new Date(b.created);
-                        case 'name': return a.name.localeCompare(b.name);
-                        case 'size': return (b.size || 0) - (a.size || 0);
-                        default: return new Date(b.created) - new Date(a.created);
-                    }
-                });
-                
-                renderFiles(filtered);
-                renderRecentFiles(files.slice().sort((a, b) => new Date(b.created) - new Date(a.created)).slice(0, 6));
-                updateBreadcrumb();
-                
-                const badge = document.getElementById('filesBadge');
-                if (badge) {
-                    if (files.length > 0) {
-                        badge.textContent = files.length;
-                        badge.classList.remove('hidden');
-                    } else {
-                        badge.classList.add('hidden');
+                if (!error && cloudFiles) {
+                    // Merge cloud files with local cache
+                    files = cloudFiles.map(cf => ({
+                        ...cf,
+                        cloudUrl: cf.cloud_url,
+                        cloudPath: cf.cloud_path,
+                        synced: true
+                    }));
+                    
+                    // Update local cache
+                    for (const file of files) {
+                        await dbPut('files', file);
                     }
                 }
             } catch (e) {
-                console.warn('Error loading files:', e);
+                console.warn('Cloud fetch failed, using local:', e);
             }
         }
+        
+        // Fallback to local or merge with local-only files
+        const localFiles = await dbGetAll('files');
+        
+        if (files.length === 0) {
+            files = localFiles;
+        } else {
+            // Add any local-only files (not synced)
+            const cloudIds = new Set(files.map(f => f.id));
+            const localOnly = localFiles.filter(f => !cloudIds.has(f.id) && !f.synced);
+            files = [...files, ...localOnly];
+        }
+        
+        const filter = document.getElementById('fileFilter')?.value || 'all';
+        const sort = document.getElementById('sortOrder')?.value || 'newest';
+        
+        let filtered = files.filter(f => f.folder === currentFolder);
+        
+        if (filter !== 'all') {
+            filtered = filtered.filter(f => {
+                if (filter === 'folder') return f.type === 'folder';
+                if (filter === 'image') return f.type?.startsWith('image/');
+                if (filter === 'video') return f.type?.startsWith('video/');
+                if (filter === 'audio') return f.type?.startsWith('audio/');
+                if (filter === 'document') return !f.type?.startsWith('image/') && !f.type?.startsWith('video/') && !f.type?.startsWith('audio/') && f.type !== 'folder';
+                return true;
+            });
+        }
+        
+        filtered.sort((a, b) => {
+            switch (sort) {
+                case 'oldest': return new Date(a.created) - new Date(b.created);
+                case 'name': return a.name.localeCompare(b.name);
+                case 'size': return (b.size || 0) - (a.size || 0);
+                default: return new Date(b.created) - new Date(a.created);
+            }
+        });
+        
+        renderFiles(filtered);
+        renderRecentFiles(files.slice().sort((a, b) => new Date(b.created) - new Date(a.created)).slice(0, 6));
+        updateBreadcrumb();
+        
+        const badge = document.getElementById('filesBadge');
+        if (badge) {
+            if (files.length > 0) {
+                badge.textContent = files.length;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+    } catch (e) {
+        console.warn('Error loading files:', e);
+    }
+}
 
         function renderFiles(files) {
             const grid = document.getElementById('filesGrid');
@@ -1460,74 +1589,147 @@
         }
 
         async function uploadFiles(files) {
-            const uploadQueue = document.getElementById('uploadQueue');
-            const uploadList = document.getElementById('uploadList');
-            if (uploadQueue) uploadQueue.classList.remove('hidden');
-            if (uploadList) uploadList.innerHTML = '';
-            
-            let successCount = 0;
-            
-            for (const file of files) {
-                if (file.size > CONFIG.MAX_FILE_SIZE) {
-                    showToast('Error', `${file.name} exceeds 50MB limit`, 'error');
-                    continue;
-                }
-                
-                const fileId = Date.now() + Math.random().toString(36).substr(2, 9);
-                
-                if (uploadList) {
-                    const uploadItem = document.createElement('div');
-                    uploadItem.id = `upload-${fileId}`;
-                    uploadItem.className = 'glass rounded-xl p-4';
-                    uploadItem.innerHTML = `
-                        <div class="flex items-center gap-4">
-                            <i class="fas ${getFileIcon(file.type)} text-2xl text-indigo-400"></i>
-                            <div class="flex-1 min-w-0">
-                                <p class="font-medium truncate text-sm">${escapeHtml(file.name)}</p>
-                                <p class="text-xs text-gray-400">${formatBytes(file.size)}</p>
-                                <div class="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
-                                    <div class="upload-progress h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style="width: 0%"></div>
-                                </div>
-                            </div>
-                            <span class="upload-percent text-sm text-gray-400">0%</span>
-                        </div>
-                    `;
-                    uploadList.appendChild(uploadItem);
-                }
-                
-                try {
-                    const fileData = await readFileAsDataURL(file, document.getElementById(`upload-${fileId}`));
-                    
-                    const fileRecord = {
-                        name: file.name,
-                        type: file.type || 'application/octet-stream',
-                        size: file.size,
-                        data: fileData,
-                        folder: currentFolder,
-                        created: new Date().toISOString(),
-                        modified: new Date().toISOString(),
-                        starred: false,
-                        synced: false
-                    };
-                    
-                    await dbAdd('files', fileRecord);
-                    await logActivity('upload', `Uploaded ${file.name}`);
-                    successCount++;
-                } catch (error) {
-                    console.error('Upload error:', error);
-                }
-            }
-            
-            if (successCount > 0) {
-                showToast('Upload Complete', `${successCount} file(s) uploaded`, 'success');
-                await updateStats();
-                await loadFiles();
-            }
-            
-            setTimeout(() => {
-                if (uploadQueue) uploadQueue.classList.add('hidden');
-            }, 2000);
+    const uploadQueue = document.getElementById('uploadQueue');
+    const uploadList = document.getElementById('uploadList');
+    if (uploadQueue) uploadQueue.classList.remove('hidden');
+    if (uploadList) uploadList.innerHTML = '';
+    
+    let successCount = 0;
+    
+    for (const file of files) {
+        if (file.size > CONFIG.MAX_FILE_SIZE) {
+            showToast('Error', `${file.name} exceeds 50MB limit`, 'error');
+            continue;
         }
+        
+        const fileId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).substr(2);
+        
+        if (uploadList) {
+            const uploadItem = document.createElement('div');
+            uploadItem.id = `upload-${fileId}`;
+            uploadItem.className = 'glass rounded-xl p-4';
+            uploadItem.innerHTML = `
+                <div class="flex items-center gap-4">
+                    <i class="fas ${getFileIcon(file.type)} text-2xl text-indigo-400"></i>
+                    <div class="flex-1 min-w-0">
+                        <p class="font-medium truncate text-sm">${escapeHtml(file.name)}</p>
+                        <p class="text-xs text-gray-400">${formatBytes(file.size)}</p>
+                        <div class="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
+                            <div class="upload-progress h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <span class="upload-percent text-sm text-gray-400">0%</span>
+                </div>
+            `;
+            uploadList.appendChild(uploadItem);
+        }
+        
+        try {
+            const uploadItem = document.getElementById(`upload-${fileId}`);
+            let cloudUrl = null;
+            let synced = false;
+            
+            // Upload to cloud first if connected
+            if (supabaseClient && isOnline && currentProvider === 'supabase') {
+                try {
+                    const filePath = `${currentFolder || 'root'}/${fileId}_${file.name}`;
+                    
+                    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+                        .from(CONFIG.STORAGE_BUCKET)
+                        .upload(filePath, file, {
+                            cacheControl: '3600',
+                            upsert: true
+                        });
+                    
+                    if (uploadError) throw uploadError;
+                    
+                    // Get public URL
+                    const { data: urlData } = supabaseClient.storage
+                        .from(CONFIG.STORAGE_BUCKET)
+                        .getPublicUrl(filePath);
+                    
+                    cloudUrl = urlData?.publicUrl;
+                    synced = true;
+                    
+                    if (uploadItem) {
+                        const progress = uploadItem.querySelector('.upload-progress');
+                        const percentEl = uploadItem.querySelector('.upload-percent');
+                        if (progress) progress.style.width = '50%';
+                        if (percentEl) percentEl.textContent = '50%';
+                    }
+                } catch (cloudError) {
+                    console.warn('Cloud upload failed, saving locally:', cloudError);
+                }
+            }
+            
+            // Read file for local storage (and as fallback)
+            const fileData = await readFileAsDataURL(file, uploadItem);
+            
+            const fileRecord = {
+                id: fileId,
+                name: file.name,
+                type: file.type || 'application/octet-stream',
+                size: file.size,
+                data: synced ? null : fileData, // Don't store blob locally if synced
+                cloudUrl: cloudUrl,
+                cloudPath: synced ? `${currentFolder || 'root'}/${fileId}_${file.name}` : null,
+                folder: currentFolder,
+                created: new Date().toISOString(),
+                modified: new Date().toISOString(),
+                starred: false,
+                synced: synced
+            };
+            
+            // Save metadata to local IndexedDB
+            await dbPut('files', fileRecord);
+            
+            // Save metadata to cloud database
+            if (supabaseClient && isOnline) {
+                const { error: dbError } = await supabaseClient
+                    .from('files')
+                    .upsert({
+                        id: fileId,
+                        name: file.name,
+                        type: file.type,
+                        size: file.size,
+                        cloud_url: cloudUrl,
+                        cloud_path: fileRecord.cloudPath,
+                        folder: currentFolder,
+                        created: fileRecord.created,
+                        modified: fileRecord.modified,
+                        starred: false,
+                        synced: true
+                    });
+                
+                if (dbError) console.warn('Metadata sync error:', dbError);
+            }
+            
+            await logActivity('upload', `Uploaded ${file.name}${synced ? ' (cloud)' : ' (local)'}`);
+            successCount++;
+            
+            if (uploadItem) {
+                const progress = uploadItem.querySelector('.upload-progress');
+                const percentEl = uploadItem.querySelector('.upload-percent');
+                if (progress) progress.style.width = '100%';
+                if (percentEl) percentEl.textContent = '100%';
+            }
+            
+        } catch (error) {
+            console.error('Upload error:', error);
+            showToast('Error', `Failed to upload ${file.name}`, 'error');
+        }
+    }
+    
+    if (successCount > 0) {
+        showToast('Upload Complete', `${successCount} file(s) uploaded`, 'success');
+        await updateStats();
+        await loadFiles();
+    }
+    
+    setTimeout(() => {
+        if (uploadQueue) uploadQueue.classList.add('hidden');
+    }, 2000);
+}
 
         function readFileAsDataURL(file, uploadItem) {
             return new Promise((resolve, reject) => {
@@ -1550,32 +1752,89 @@
         }
 
         async function downloadFile(id) {
-            const file = await dbGet('files', id);
-            if (!file) return;
+    const file = await dbGet('files', id);
+    if (!file) return;
+    
+    showToast('Downloading', `Preparing ${file.name}...`, 'info');
+    
+    let downloadUrl = null;
+    
+    // Try cloud URL first
+    if (file.cloudUrl && isOnline) {
+        downloadUrl = file.cloudUrl;
+    } else if (file.cloudPath && supabaseClient && isOnline) {
+        // Generate signed URL for private files
+        try {
+            const { data, error } = await supabaseClient.storage
+                .from(CONFIG.STORAGE_BUCKET)
+                .createSignedUrl(file.cloudPath, 60); // 60 seconds expiry
             
-            const a = document.createElement('a');
-            a.href = file.data;
-            a.download = file.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            
-            await logActivity('download', `Downloaded ${file.name}`);
-            showToast('Download', 'Download started', 'success');
+            if (!error && data) {
+                downloadUrl = data.signedUrl;
+            }
+        } catch (e) {
+            console.warn('Could not get cloud URL:', e);
         }
+    }
+    
+    // Fallback to local data
+    if (!downloadUrl && file.data) {
+        downloadUrl = file.data;
+    }
+    
+    if (!downloadUrl) {
+        showToast('Error', 'File not available', 'error');
+        return;
+    }
+    
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = file.name;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    await logActivity('download', `Downloaded ${file.name}`);
+    showToast('Download', 'Download started', 'success');
+}
 
         async function deleteFile(id) {
-            const file = await dbGet('files', id);
-            if (!file) return;
-            
-            if (confirm(`Delete "${file.name}"?`)) {
-                await dbDelete('files', id);
-                await logActivity('delete', `Deleted ${file.name}`);
-                showToast('Deleted', `${file.name} deleted`, 'success');
-                await updateStats();
-                await loadFiles();
+    const file = await dbGet('files', id);
+    if (!file) return;
+    
+    if (confirm(`Delete "${file.name}"?`)) {
+        // Delete from cloud storage
+        if (file.cloudPath && supabaseClient && isOnline) {
+            try {
+                await supabaseClient.storage
+                    .from(CONFIG.STORAGE_BUCKET)
+                    .remove([file.cloudPath]);
+            } catch (e) {
+                console.warn('Cloud delete error:', e);
             }
         }
+        
+        // Delete from cloud database
+        if (supabaseClient && isOnline) {
+            try {
+                await supabaseClient
+                    .from('files')
+                    .delete()
+                    .eq('id', id);
+            } catch (e) {
+                console.warn('Cloud DB delete error:', e);
+            }
+        }
+        
+        // Delete from local
+        await dbDelete('files', id);
+        await logActivity('delete', `Deleted ${file.name}`);
+        showToast('Deleted', `${file.name} deleted`, 'success');
+        await updateStats();
+        await loadFiles();
+    }
+}
 
         async function toggleStar(id) {
             const file = await dbGet('files', id);
@@ -1793,21 +2052,49 @@
             }
         }
 
-        function processSQL(query) {
-            const upperQuery = query.toUpperCase().trim();
-            
-            if (upperQuery.startsWith('CREATE TABLE')) return createTable(query);
-            if (upperQuery.startsWith('INSERT INTO')) return insertInto(query);
-            if (upperQuery.startsWith('SELECT')) return selectFrom(query);
-            if (upperQuery.startsWith('UPDATE')) return updateTable(query);
-            if (upperQuery.startsWith('DELETE FROM')) return deleteFrom(query);
-            if (upperQuery.startsWith('DROP TABLE')) return dropTable(query);
-            if (upperQuery.startsWith('TRUNCATE')) return truncateTable(query);
-            if (upperQuery.startsWith('DESCRIBE') || upperQuery.startsWith('DESC')) return describeTable(query);
-            if (upperQuery.startsWith('SHOW TABLES')) return showTables();
-            
-            throw new Error('Unsupported SQL command');
+       function processSQL(query) {
+    const upperQuery = query.toUpperCase().trim();
+    
+    let result;
+    if (upperQuery.startsWith('CREATE TABLE')) result = createTable(query);
+    else if (upperQuery.startsWith('INSERT INTO')) result = insertInto(query);
+    else if (upperQuery.startsWith('SELECT')) result = selectFrom(query);
+    else if (upperQuery.startsWith('UPDATE')) result = updateTable(query);
+    else if (upperQuery.startsWith('DELETE FROM')) result = deleteFrom(query);
+    else if (upperQuery.startsWith('DROP TABLE')) result = dropTable(query);
+    else if (upperQuery.startsWith('TRUNCATE')) result = truncateTable(query);
+    else if (upperQuery.startsWith('DESCRIBE') || upperQuery.startsWith('DESC')) result = describeTable(query);
+    else if (upperQuery.startsWith('SHOW TABLES')) result = showTables();
+    else throw new Error('Unsupported SQL command');
+    
+    // Sync SQL tables to cloud after modification
+    if (!upperQuery.startsWith('SELECT') && !upperQuery.startsWith('SHOW') && !upperQuery.startsWith('DESC')) {
+        syncSQLTablesToCloud();
+    }
+    
+    return result;
+}
+
+async function syncSQLTablesToCloud() {
+    if (!supabaseClient || !isOnline) return;
+    
+    try {
+        for (const [name, table] of Object.entries(sqlTables)) {
+            await supabaseClient
+                .from('sql_tables')
+                .upsert({
+                    name: table.name,
+                    columns: table.columns,
+                    rows: table.rows,
+                    created: table.created,
+                    modified: new Date().toISOString()
+                });
         }
+        console.log('📊 SQL tables synced to cloud');
+    } catch (e) {
+        console.warn('SQL sync error:', e);
+    }
+}
 
         function createTable(query) {
             const match = query.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.+)\)/is);
