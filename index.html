@@ -668,8 +668,11 @@
                                 <button onclick="testSupabase()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
                                     <i class="fas fa-vial mr-2"></i>Test Connection
                                 </button>
-                                <button onclick="recheckBucket()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
+                                                                <button onclick="recheckBucket()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
                                     <i class="fas fa-database mr-2"></i>Check Storage
+                                </button>
+                                <button onclick="debugStorage()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10 text-yellow-400">
+                                    <i class="fas fa-bug mr-2"></i>Debug
                                 </button>
                                 <a href="https://supabase.com/dashboard" target="_blank" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
                                     <i class="fas fa-external-link-alt mr-2"></i>Open Dashboard
@@ -1403,6 +1406,67 @@ async function recheckBucket() {
         // Show setup guide
         const guide = document.getElementById('supabaseSetupGuide');
         if (guide) guide.classList.remove('hidden');
+    }
+}
+
+async function debugStorage() {
+    console.log('=== STORAGE DEBUG ===');
+    console.log('Supabase URL:', CONFIG.SUPABASE_URL);
+    console.log('Bucket name:', CONFIG.STORAGE_BUCKET);
+    console.log('Client ready:', !!supabaseClient);
+    console.log('Online:', isOnline);
+    
+    if (!supabaseClient) {
+        showToast('Error', 'Supabase client not initialized', 'error');
+        return;
+    }
+    
+    // Test 1: List buckets (will likely fail with anon key)
+    console.log('\n--- Test 1: List Buckets ---');
+    const { data: buckets, error: bucketsError } = await supabaseClient.storage.listBuckets();
+    console.log('Buckets:', buckets);
+    console.log('Error:', bucketsError?.message || 'none');
+    
+    // Test 2: List files in bucket
+    console.log('\n--- Test 2: List Files ---');
+    const { data: files, error: filesError } = await supabaseClient.storage
+        .from(CONFIG.STORAGE_BUCKET)
+        .list('', { limit: 5 });
+    console.log('Files:', files);
+    console.log('Error:', filesError?.message || 'none');
+    
+    // Test 3: Upload test
+    console.log('\n--- Test 3: Upload Test ---');
+    const testBlob = new Blob(['debug-test'], { type: 'text/plain' });
+    const testName = `.debug-${Date.now()}.txt`;
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+        .from(CONFIG.STORAGE_BUCKET)
+        .upload(testName, testBlob);
+    console.log('Upload result:', uploadData);
+    console.log('Upload error:', uploadError?.message || 'none');
+    
+    // Cleanup
+    if (!uploadError) {
+        await supabaseClient.storage.from(CONFIG.STORAGE_BUCKET).remove([testName]);
+        console.log('✅ Cleanup done');
+    }
+    
+    // Summary
+    console.log('\n=== SUMMARY ===');
+    const summary = {
+        listBuckets: !bucketsError ? '✅' : '❌ ' + bucketsError.message,
+        listFiles: !filesError ? '✅' : '❌ ' + filesError.message,
+        upload: !uploadError ? '✅' : '❌ ' + uploadError.message
+    };
+    console.table(summary);
+    
+    // Show result
+    if (!uploadError) {
+        showToast('Success', 'Storage is working! Refresh page.', 'success');
+        cloudBucketReady = true;
+        bucketCheckDone = false; // Allow recheck
+    } else {
+        showToast('Storage Issue', `Upload failed: ${uploadError.message}`, 'error');
     }
 }
 
