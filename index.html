@@ -493,7 +493,7 @@
 -- INSERT INTO users (name, email) VALUES ('John', 'john@email.com')
 -- SELECT * FROM users WHERE name LIKE '%John%'
 -- UPDATE users SET name = 'Jane' WHERE id = 1
--- DELETE FROM users WHERE id = 1" spellcheck="false"></textarea>
+SELECT * FROM users LIMIT 10;" spellcheck="false" placeholder="-- Enter SQL query here&#10;SELECT * FROM table_name;"></textarea>
                         </div>
                         <div class="p-4 border-t border-white/10 flex gap-2">
                             <button onclick="executeSQL()" class="flex-1 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-500 rounded-lg font-semibold hover:opacity-90 transition-all">
@@ -1338,6 +1338,11 @@ async function syncFromCloud() {
        async function loadFiles() {
     try {
         let files = [];
+        if (!db) {
+            console.warn('Database not ready, retrying...');
+            setTimeout(loadFiles, 500);
+            return;
+        }
         
         // Try to get files from cloud first (for real-time sync)
         if (supabaseClient && isOnline && CONFIG.USE_CLOUD_PRIMARY) {
@@ -1602,7 +1607,10 @@ async function syncFromCloud() {
             continue;
         }
         
-        const fileId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).substr(2);
+        const fileId = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+}));
         
         if (uploadList) {
             const uploadItem = document.createElement('div');
@@ -2133,8 +2141,14 @@ async function syncSQLTablesToCloud() {
             if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
             if (columns.length !== values.length) throw new Error('Column count mismatch');
             
-            const row = { _id: Date.now() };
-            columns.forEach((col, i) => row[col] = values[i]);
+            const row = Object.create(null);
+row._id = Date.now();
+const forbiddenKeys = ['__proto__', 'constructor', 'prototype'];
+columns.forEach((col, i) => {
+    if (!forbiddenKeys.includes(col.toLowerCase())) {
+        row[col] = values[i];
+    }
+});
             
             sqlTables[tableName].rows.push(row);
             dbPut('sqlTables', sqlTables[tableName]);
@@ -2345,7 +2359,11 @@ async function syncSQLTablesToCloud() {
                 case '>': return parseFloat(rowValue) > parseFloat(value);
                 case '<=': return parseFloat(rowValue) <= parseFloat(value);
                 case '>=': return parseFloat(rowValue) >= parseFloat(value);
-                case 'LIKE': return new RegExp(value.replace(/%/g, '.*').replace(/_/g, '.'), 'i').test(rowValue);
+                case 'LIKE': {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
+    return new RegExp(`^${pattern}$`, 'i').test(String(rowValue));
+}
                 case 'IS': return value.toUpperCase() === 'NULL' ? rowValue == null : rowValue != null;
                 default: return false;
             }
@@ -2371,7 +2389,7 @@ async function syncSQLTablesToCloud() {
                     <div class="overflow-auto">
                         <table class="w-full text-sm">
                             <thead><tr class="border-b border-white/10">${headers.map(h => `<th class="text-left p-3 text-indigo-400">${escapeHtml(h)}</th>`).join('')}</tr></thead>
-                            <tbody>${result.rows.map((row, i) => `<tr class="table-row border-b border-white/5">${headers.map(h => `<td class="p-3">${row[h] ?? '<span class="text-gray-500">NULL</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+                            <tbody>${result.rows.map((row, i) => `<tr class="table-row border-b border-white/5">${headers.map(h => `<td class="p-3">${row[h] != null ? escapeHtml(String(row[h])) : '<span class="text-gray-500">NULL</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
                         </table>
                     </div>
                     <p class="text-gray-400 text-sm mt-4">${result.rows.length} row(s)</p>
@@ -2469,7 +2487,7 @@ SELECT * FROM logs;`
             
             const content = sqlHistory.map((h, i) => `
                 <div class="glass rounded-xl p-3 mb-2 cursor-pointer hover:bg-white/10" onclick="loadHistoryQuery(${i})">
-                    <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query)}</pre>
+                    <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query.substring(0, 200))}</pre>
                     <p class="text-xs text-gray-400 mt-1">${formatRelativeTime(h.timestamp)}</p>
                 </div>
             `).join('');
