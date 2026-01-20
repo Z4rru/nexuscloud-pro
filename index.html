@@ -661,16 +661,21 @@
                                 </div>
                             </div>
                             <div class="flex gap-2 mt-4">
+                                                            <div class="flex flex-wrap gap-2 mt-4">
                                 <button onclick="connectSupabase()" class="px-4 py-2 btn-primary rounded-lg text-sm">
                                     <i class="fas fa-plug mr-2"></i>Connect
                                 </button>
                                 <button onclick="testSupabase()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
                                     <i class="fas fa-vial mr-2"></i>Test Connection
                                 </button>
+                                <button onclick="recheckBucket()" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
+                                    <i class="fas fa-database mr-2"></i>Check Storage
+                                </button>
                                 <a href="https://supabase.com/dashboard" target="_blank" class="px-4 py-2 glass rounded-lg text-sm hover:bg-white/10">
                                     <i class="fas fa-external-link-alt mr-2"></i>Open Dashboard
                                 </a>
                             </div>
+                            <div id="bucketStatus" class="mt-3 text-sm"></div>
                         </div>
                         
                         <!-- GitHub Config -->
@@ -775,8 +780,8 @@
                     </div>
                 </div>
                 
-                               <!-- Supabase Setup Guide -->
-                <div id="supabaseSetupGuide" class="glass rounded-2xl p-6 border border-yellow-500/30 bg-yellow-500/5">
+                                              <!-- Supabase Setup Guide (shown when bucket not ready) -->
+                <div id="supabaseSetupGuide" class="glass rounded-2xl p-6 border border-yellow-500/30 bg-yellow-500/5 hidden">
                     <h3 class="text-xl font-bold mb-4"><i class="fas fa-exclamation-triangle text-yellow-400 mr-2"></i>Supabase Setup Required</h3>
                     <p class="text-gray-400 mb-4">To enable full cloud storage, create these in your Supabase dashboard:</p>
                     
@@ -1255,7 +1260,12 @@ async function tryAutoConnect() {
             }
             if (syncEl) syncEl.textContent = cloudBucketReady ? 'Cloud Sync' : 'Metadata Sync';
             
-            console.log(`✅ Supabase connected ${cloudBucketReady ? '(full cloud storage)' : '(metadata only - bucket not ready)'}`);
+                        if (cloudBucketReady) {
+                console.log('✅ Supabase connected with full cloud storage');
+            } else {
+                console.log('✅ Supabase connected (metadata sync only)');
+                console.log('💡 Files stored locally. Create bucket for cloud storage.');
+            }
             
             // Start real-time sync
             startCloudSync();
@@ -1273,51 +1283,108 @@ async function tryAutoConnect() {
     return false;
 }
 
+let bucketCheckDone = false;
+let bucketErrorShown = false;
+
 async function ensureBucketExists() {
+    // Only check once per session to avoid spam
+    if (bucketCheckDone) return cloudBucketReady;
+    
     try {
         const { data: buckets, error } = await supabaseClient.storage.listBuckets();
         
         if (error) {
-            console.warn('Cannot list buckets:', error.message);
+            // RLS might block listing - try to access bucket directly
+            const { data: testList, error: testError } = await supabaseClient.storage
+                .from(CONFIG.STORAGE_BUCKET)
+                .list('', { limit: 1 });
+            
+            if (!testError) {
+                console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' accessible`);
+                bucketCheckDone = true;
+                return true;
+            }
+            
+            console.warn('Cannot access storage:', error.message);
+            bucketCheckDone = true;
+            showBucketSetupOnce();
             return false;
         }
         
         const bucketExists = buckets?.some(b => b.name === CONFIG.STORAGE_BUCKET);
         
         if (!bucketExists) {
-            // Try to create the bucket
-            console.log(`🪣 Attempting to create bucket '${CONFIG.STORAGE_BUCKET}'...`);
-            const { error: createError } = await supabaseClient.storage.createBucket(CONFIG.STORAGE_BUCKET, {
-                public: true,
-                fileSizeLimit: 52428800 // 50MB
-            });
-            
-            if (createError) {
-                if (createError.message?.includes('already exists')) {
-                    console.log('✅ Bucket already exists');
-                    return true;
-                }
-                console.warn(`⚠️ Cannot create bucket: ${createError.message}`);
-                console.log('📌 To enable cloud file storage:');
-                console.log('   1. Go to https://supabase.com/dashboard');
-                console.log('   2. Select your project → Storage');
-                console.log(`   3. Create a new bucket named "${CONFIG.STORAGE_BUCKET}"`);
-                console.log('   4. Set it as PUBLIC');
-                showToast('Setup Required', 'Create storage bucket in Supabase dashboard', 'warning');
-                return false;
-            }
-            
-            console.log('✅ Bucket created successfully!');
-            showToast('Success', 'Cloud storage bucket created!', 'success');
-            return true;
+            console.warn(`⚠️ Bucket '${CONFIG.STORAGE_BUCKET}' not found`);
+            bucketCheckDone = true;
+            showBucketSetupOnce();
+            return false;
         }
         
         console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' ready`);
+        bucketCheckDone = true;
         return true;
     } catch (e) {
-        console.warn('Bucket check error:', e);
+        console.warn('Bucket check error:', e.message);
+        bucketCheckDone = true;
         return false;
     }
+}
+
+async function recheckBucket() {
+    bucketCheckDone = false;
+    bucketErrorShown = false;
+    
+    showToast('Checking', 'Verifying storage bucket...', 'info');
+    
+    cloudBucketReady = await ensureBucketExists();
+    
+    const statusEl = document.getElementById('bucketStatus');
+    const supabaseStatusEl = document.getElementById('supabaseStatus');
+    
+    if (cloudBucketReady) {
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="text-green-400"><i class="fas fa-check-circle mr-2"></i>Storage bucket ready! Cloud uploads enabled.</span>';
+        }
+        if (supabaseStatusEl) {
+            supabaseStatusEl.textContent = 'Connected';
+            supabaseStatusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400';
+        }
+        showToast('Success', 'Cloud storage is ready!', 'success');
+        
+        // Hide setup guide
+        const guide = document.getElementById('supabaseSetupGuide');
+        if (guide) guide.classList.add('hidden');
+    } else {
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="text-yellow-400"><i class="fas fa-exclamation-triangle mr-2"></i>Bucket not found. Create it in Supabase Dashboard → Storage.</span>';
+        }
+        if (supabaseStatusEl) {
+            supabaseStatusEl.textContent = 'DB Only';
+            supabaseStatusEl.className = 'text-xs px-2 py-1 rounded-full bg-yellow-500/20 text-yellow-400';
+        }
+        
+        // Show setup guide
+        const guide = document.getElementById('supabaseSetupGuide');
+        if (guide) guide.classList.remove('hidden');
+    }
+}
+
+function showBucketSetupOnce() {
+    if (bucketErrorShown) return;
+    bucketErrorShown = true;
+    
+    console.log('📌 To enable cloud file storage:');
+    console.log('   1. Go to https://supabase.com/dashboard');
+    console.log('   2. Select your project → Storage');
+    console.log(`   3. Create a new bucket named "${CONFIG.STORAGE_BUCKET}"`);
+    console.log('   4. Make it PUBLIC');
+    console.log('   5. Add storage policies (see Settings for SQL)');
+    
+    showToast('Setup Required', 'Create "nexus-files" bucket in Supabase. See Settings for guide.', 'warning');
+    
+    // Show the setup guide in settings
+    const guide = document.getElementById('supabaseSetupGuide');
+    if (guide) guide.classList.remove('hidden');
 }
 
 async function createFilesTable() {
@@ -1823,8 +1890,8 @@ async function syncFromCloud() {
     
     let successCount = 0;
     
-    // Check bucket status before uploads
-    if (supabaseClient && isOnline && !cloudBucketReady) {
+        // Check bucket status once if not already checked
+    if (supabaseClient && isOnline && !bucketCheckDone) {
         cloudBucketReady = await ensureBucketExists();
     }
     
@@ -1904,8 +1971,8 @@ async function syncFromCloud() {
                     console.warn('Cloud upload failed, saving locally:', cloudError.message);
                     synced = false;
                 }
-            } else if (supabaseClient && isOnline && !cloudBucketReady) {
-                console.log('📁 Bucket not ready, saving locally with cloud metadata sync');
+                        } else if (supabaseClient && isOnline && !cloudBucketReady) {
+                // Silent - already logged once during init
             }
             
             // Read file for local storage (and as fallback)
