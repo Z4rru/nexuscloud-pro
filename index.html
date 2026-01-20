@@ -494,9 +494,9 @@
                             <textarea id="sqlEditor" class="sql-editor w-full h-64 p-4 pl-14 text-green-400 focus:outline-none resize-none" placeholder="-- Enter SQL query here&#10;-- CREATE TABLE users (id INTEGER, name TEXT)&#10;-- SELECT * FROM users" spellcheck="false"></textarea>
                         </div>
                         <div class="p-4 border-t border-white/10 flex gap-2">
-                            <button onclick="executeSQL()" class="flex-1 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-500 rounded-lg font-semibold hover:opacity-90 transition-all">
-                                <i class="fas fa-play mr-2"></i>Execute
-                            </button>
+                            <button type="button" onclick="executeSQL()" class="flex-1 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-500 rounded-lg font-semibold hover:opacity-90 transition-all">
+    <i class="fas fa-play mr-2" aria-hidden="true"></i>Execute
+</button>
                             <button onclick="explainSQL()" class="px-4 py-2 glass rounded-lg hover:bg-white/10" title="Explain Query">
                                 <i class="fas fa-info-circle"></i>
                             </button>
@@ -508,9 +508,9 @@
                         <div class="flex items-center justify-between p-4 border-b border-white/10">
                             <h3 class="font-bold"><i class="fas fa-table mr-2 text-indigo-400"></i>Query Results</h3>
                             <div class="flex gap-2">
-                                <button onclick="exportResults()" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10" title="Export CSV">
-                                    <i class="fas fa-download"></i>
-                                </button>
+                                <button type="button" onclick="exportResults()" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10" title="Export CSV" aria-label="Export as CSV">
+    <i class="fas fa-download" aria-hidden="true"></i>
+</button>
                                 <span id="queryTime" class="text-xs text-gray-400"></span>
                             </div>
                         </div>
@@ -540,7 +540,7 @@
                 <div class="glass rounded-2xl p-6">
                     <h3 class="text-xl font-bold mb-4"><i class="fas fa-magic mr-2"></i>Quick Templates</h3>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <button onclick="loadTemplate('users')" class="p-4 glass rounded-xl hover:bg-indigo-500/20 transition-all text-left group">
+                        <button type="button" onclick="loadTemplate('users')" class="p-4 glass rounded-xl hover:bg-indigo-500/20 transition-all text-left group">
                             <i class="fas fa-users text-xl text-indigo-400 mb-2 group-hover:scale-110 transition-transform"></i>
                             <p class="font-medium text-sm">Users Table</p>
                             <p class="text-xs text-gray-400">id, name, email, created</p>
@@ -821,9 +821,9 @@
         <button onclick="contextAction('open')" class="w-full text-left px-4 py-2 rounded-lg hover:bg-white/10 flex items-center gap-3">
             <i class="fas fa-eye w-4"></i> Open
         </button>
-        <button onclick="contextAction('download')" class="w-full text-left px-4 py-2 rounded-lg hover:bg-white/10 flex items-center gap-3">
-            <i class="fas fa-download w-4"></i> Download
-        </button>
+        <button type="button" onclick="contextAction('download')" class="w-full text-left px-4 py-2 rounded-lg hover:bg-white/10 flex items-center gap-3">
+    <i class="fas fa-download w-4" aria-hidden="true"></i> Download
+</button>
         <button onclick="contextAction('share')" class="w-full text-left px-4 py-2 rounded-lg hover:bg-white/10 flex items-center gap-3">
             <i class="fas fa-share w-4"></i> Share
         </button>
@@ -1759,50 +1759,74 @@ async function syncFromCloud() {
 
         async function downloadFile(id) {
     const file = await dbGet('files', id);
-    if (!file) return;
+    if (!file) {
+        showToast('Error', 'File not found', 'error');
+        return;
+    }
     
     showToast('Downloading', `Preparing ${file.name}...`, 'info');
     
     let downloadUrl = null;
+    let shouldRevokeUrl = false;
     
-    // Try cloud URL first
-    if (file.cloudUrl && isOnline) {
-        downloadUrl = file.cloudUrl;
-    } else if (file.cloudPath && supabaseClient && isOnline) {
-        // Generate signed URL for private files
-        try {
+    try {
+        // Try cloud URL first
+        if (file.cloudUrl && isOnline) {
+            downloadUrl = file.cloudUrl;
+        } else if (file.cloudPath && supabaseClient && isOnline) {
+            // Generate signed URL for private files
             const { data, error } = await supabaseClient.storage
                 .from(CONFIG.STORAGE_BUCKET)
-                .createSignedUrl(file.cloudPath, 60); // 60 seconds expiry
+                .createSignedUrl(file.cloudPath, 300);
             
-            if (!error && data) {
+            if (!error && data?.signedUrl) {
                 downloadUrl = data.signedUrl;
             }
-        } catch (e) {
-            console.warn('Could not get cloud URL:', e);
         }
+        
+        // Fallback to local data
+        if (!downloadUrl && file.data) {
+            // Convert data URL to blob for better download handling
+            if (file.data.startsWith('data:')) {
+                const response = await fetch(file.data);
+                const blob = await response.blob();
+                downloadUrl = URL.createObjectURL(blob);
+                shouldRevokeUrl = true;
+            } else {
+                downloadUrl = file.data;
+            }
+        }
+        
+        if (!downloadUrl) {
+            showToast('Error', 'File data not available. Try syncing first.', 'error');
+            return;
+        }
+        
+        // Create and trigger download
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = file.name || 'download';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        
+        // Use setTimeout to ensure the click registers
+        setTimeout(() => {
+            a.click();
+            document.body.removeChild(a);
+            
+            // Clean up blob URL after download starts
+            if (shouldRevokeUrl) {
+                setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+            }
+        }, 100);
+        
+        await logActivity('download', `Downloaded ${file.name}`);
+        showToast('Download', 'Download started', 'success');
+        
+    } catch (error) {
+        console.error('Download error:', error);
+        showToast('Error', 'Download failed: ' + error.message, 'error');
     }
-    
-    // Fallback to local data
-    if (!downloadUrl && file.data) {
-        downloadUrl = file.data;
-    }
-    
-    if (!downloadUrl) {
-        showToast('Error', 'File not available', 'error');
-        return;
-    }
-    
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = file.name;
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    
-    await logActivity('download', `Downloaded ${file.name}`);
-    showToast('Download', 'Download started', 'success');
 }
 
         async function deleteFile(id) {
@@ -2501,26 +2525,39 @@ SELECT * FROM logs;`
         }
 
         function exportResults() {
-            const table = document.querySelector('#queryResults table');
-            if (!table) {
-                showToast('No Data', 'Execute a query first', 'warning');
-                return;
-            }
-            
-            let csv = '';
-            table.querySelectorAll('tr').forEach(row => {
-                const cells = row.querySelectorAll('th, td');
-                csv += Array.from(cells).map(c => `"${c.textContent.replace(/"/g, '""')}"`).join(',') + '\n';
-            });
-            
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'results.csv';
-            a.click();
-            
-            showToast('Exported', 'CSV downloaded', 'success');
+    try {
+        const table = document.querySelector('#queryResults table');
+        if (!table) {
+            showToast('No Data', 'Execute a query first', 'warning');
+            return;
         }
+        
+        let csv = '\uFEFF'; // BOM for Excel UTF-8 compatibility
+        table.querySelectorAll('tr').forEach(row => {
+            const cells = row.querySelectorAll('th, td');
+            csv += Array.from(cells).map(c => `"${(c.textContent || '').replace(/"/g, '""')}"`).join(',') + '\n';
+        });
+        
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `query-results-${Date.now()}.csv`;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        
+        setTimeout(() => {
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }, 100);
+        
+        showToast('Exported', 'CSV downloaded', 'success');
+    } catch (error) {
+        console.error('Export error:', error);
+        showToast('Error', 'Export failed', 'error');
+    }
+}
 
         function explainSQL() {
             showToast('SQL', 'This query retrieves or modifies data', 'info');
