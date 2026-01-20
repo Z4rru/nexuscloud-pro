@@ -1203,12 +1203,25 @@ async function syncFromCloud() {
         
         if (error) throw error;
         
-        // Update local cache
+        // Update local cache while PRESERVING local data
         if (cloudFiles && cloudFiles.length > 0) {
-            for (const file of cloudFiles) {
-                const localFile = await dbGet('files', file.id);
-                if (!localFile || new Date(file.modified) > new Date(localFile.modified)) {
-                    await dbPut('files', { ...file, synced: true });
+            for (const cloudFile of cloudFiles) {
+                const localFile = await dbGet('files', cloudFile.id);
+                
+                // Merge cloud metadata with local data
+                const mergedFile = {
+                    ...cloudFile,
+                    // Normalize field names
+                    cloudUrl: cloudFile.cloud_url || cloudFile.cloudUrl,
+                    cloudPath: cloudFile.cloud_path || cloudFile.cloudPath,
+                    // IMPORTANT: Preserve local data if it exists
+                    data: localFile?.data || cloudFile.data,
+                    synced: true
+                };
+                
+                // Only update if cloud is newer OR local doesn't exist
+                if (!localFile || new Date(cloudFile.modified) > new Date(localFile.modified)) {
+                    await dbPut('files', mergedFile);
                 }
             }
         }
@@ -1770,76 +1783,144 @@ async function syncFromCloud() {
         return;
     }
     
+    console.log('📥 Download attempt for:', file.name, {
+        hasData: !!file.data,
+        cloudUrl: file.cloudUrl || file.cloud_url,
+        cloudPath: file.cloudPath || file.cloud_path,
+        id: file.id
+    });
+    
     showToast('Downloading', `Preparing ${file.name}...`, 'info');
     
     let downloadUrl = null;
     let shouldRevokeUrl = false;
     let blob = null;
     
+    // Normalize cloud fields (handle both camelCase and snake_case)
+    const cloudPath = file.cloudPath || file.cloud_path;
+    const cloudUrl = file.cloudUrl || file.cloud_url;
+    
     try {
         // Method 1: Use local data if available (fastest)
-        if (file.data && file.data.startsWith('data:')) {
+        if (file.data && typeof file.data === 'string' && file.data.startsWith('data:')) {
             try {
                 const response = await fetch(file.data);
                 blob = await response.blob();
                 downloadUrl = URL.createObjectURL(blob);
                 shouldRevokeUrl = true;
-                console.log('Using local data for download');
+                console.log('✅ Method 1: Using local data');
             } catch (e) {
-                console.warn('Local data fetch failed:', e);
+                console.warn('❌ Method 1 failed:', e.message);
             }
         }
         
-        // Method 2: Try cloud URL
-        if (!downloadUrl && file.cloudUrl && isOnline) {
+        // Method 2: Download directly from Supabase storage (most reliable for cloud)
+        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
             try {
-                // Verify URL is accessible
-                const testResponse = await fetch(file.cloudUrl, { method: 'HEAD' });
-                if (testResponse.ok) {
-                    downloadUrl = file.cloudUrl;
-                    console.log('Using cloud URL for download');
-                }
-            } catch (e) {
-                console.warn('Cloud URL not accessible:', e);
-            }
-        }
-        
-        // Method 3: Generate signed URL from Supabase
-        if (!downloadUrl && file.cloudPath && supabaseClient && isOnline) {
-            try {
+                console.log('🔄 Method 2: Trying Supabase download with path:', cloudPath);
                 const { data, error } = await supabaseClient.storage
                     .from(CONFIG.STORAGE_BUCKET)
-                    .createSignedUrl(file.cloudPath, 300);
-                
-                if (!error && data?.signedUrl) {
-                    downloadUrl = data.signedUrl;
-                    console.log('Using signed URL for download');
-                }
-            } catch (e) {
-                console.warn('Signed URL generation failed:', e);
-            }
-        }
-        
-        // Method 4: Download directly from Supabase storage
-        if (!downloadUrl && file.cloudPath && supabaseClient && isOnline) {
-            try {
-                const { data, error } = await supabaseClient.storage
-                    .from(CONFIG.STORAGE_BUCKET)
-                    .download(file.cloudPath);
+                    .download(cloudPath);
                 
                 if (!error && data) {
                     blob = data;
                     downloadUrl = URL.createObjectURL(blob);
                     shouldRevokeUrl = true;
-                    console.log('Downloaded blob from Supabase');
+                    console.log('✅ Method 2: Downloaded from Supabase storage');
+                } else if (error) {
+                    console.warn('❌ Method 2 error:', error.message);
                 }
             } catch (e) {
-                console.warn('Direct Supabase download failed:', e);
+                console.warn('❌ Method 2 failed:', e.message);
+            }
+        }
+        
+        // Method 3: Try signed URL from Supabase
+        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
+            try {
+                console.log('🔄 Method 3: Generating signed URL');
+                const { data, error } = await supabaseClient.storage
+                    .from(CONFIG.STORAGE_BUCKET)
+                    .createSignedUrl(cloudPath, 3600);
+                
+                if (!error && data?.signedUrl) {
+                    // Fetch the blob using signed URL
+                    const response = await fetch(data.signedUrl);
+                    if (response.ok) {
+                        blob = await response.blob();
+                        downloadUrl = URL.createObjectURL(blob);
+                        shouldRevokeUrl = true;
+                        console.log('✅ Method 3: Downloaded via signed URL');
+                    }
+                } else if (error) {
+                    console.warn('❌ Method 3 error:', error.message);
+                }
+            } catch (e) {
+                console.warn('❌ Method 3 failed:', e.message);
+            }
+        }
+        
+        // Method 4: Try to list and find the file in storage
+        if (!downloadUrl && supabaseClient && isOnline) {
+            try {
+                console.log('🔄 Method 4: Searching for file in storage');
+                const folder = file.folder || 'root';
+                const { data: files, error } = await supabaseClient.storage
+                    .from(CONFIG.STORAGE_BUCKET)
+                    .list(folder);
+                
+                if (!error && files) {
+                    // Find file that matches the name
+                    const matchingFile = files.find(f => 
+                        f.name.includes(file.name) || 
+                        f.name.includes(file.id)
+                    );
+                    
+                    if (matchingFile) {
+                        const fullPath = `${folder}/${matchingFile.name}`;
+                        console.log('🔄 Found file at:', fullPath);
+                        
+                        const { data: blobData, error: dlError } = await supabaseClient.storage
+                            .from(CONFIG.STORAGE_BUCKET)
+                            .download(fullPath);
+                        
+                        if (!dlError && blobData) {
+                            blob = blobData;
+                            downloadUrl = URL.createObjectURL(blob);
+                            shouldRevokeUrl = true;
+                            console.log('✅ Method 4: Found and downloaded file');
+                            
+                            // Update the file record with correct path
+                            file.cloudPath = fullPath;
+                            file.cloud_path = fullPath;
+                            await dbPut('files', file);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('❌ Method 4 failed:', e.message);
+            }
+        }
+        
+        // Method 5: Direct public URL (last resort, may fail due to CORS)
+        if (!downloadUrl && cloudUrl && isOnline) {
+            try {
+                console.log('🔄 Method 5: Trying direct URL:', cloudUrl);
+                const response = await fetch(cloudUrl, { mode: 'cors' });
+                if (response.ok) {
+                    blob = await response.blob();
+                    downloadUrl = URL.createObjectURL(blob);
+                    shouldRevokeUrl = true;
+                    console.log('✅ Method 5: Using direct cloud URL');
+                }
+            } catch (e) {
+                console.warn('❌ Method 5 failed (CORS?):', e.message);
             }
         }
         
         if (!downloadUrl) {
-            showToast('Error', 'File data not available. The file may need to be re-uploaded.', 'error');
+            console.error('❌ All download methods failed for file:', file);
+            showToast('Error', 'File data not available. Check console for details.', 'error');
             return;
         }
         
@@ -1848,7 +1929,6 @@ async function syncFromCloud() {
         a.href = downloadUrl;
         a.download = file.name || 'download';
         a.style.display = 'none';
-        a.target = '_blank'; // Helps with some browsers
         document.body.appendChild(a);
         
         // Trigger download
@@ -1856,7 +1936,9 @@ async function syncFromCloud() {
         
         // Cleanup
         setTimeout(() => {
-            document.body.removeChild(a);
+            if (document.body.contains(a)) {
+                document.body.removeChild(a);
+            }
             if (shouldRevokeUrl && downloadUrl) {
                 URL.revokeObjectURL(downloadUrl);
             }
@@ -1866,7 +1948,7 @@ async function syncFromCloud() {
         showToast('Success', `${file.name} download started`, 'success');
         
     } catch (error) {
-        console.error('Download error:', error);
+        console.error('❌ Download error:', error);
         showToast('Error', 'Download failed: ' + (error.message || 'Unknown error'), 'error');
     }
 }
