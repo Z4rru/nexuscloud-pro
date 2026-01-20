@@ -1949,15 +1949,12 @@ async function syncFromCloud() {
         
         if (!downloadUrl) {
             console.error('❌ All download methods failed for file:', file);
-            
-            // Check if it's an orphan file
             const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
             const hasCloudPath = file.cloudPath || file.cloud_path;
-            
             if (!hasLocalData && !hasCloudPath) {
-                showToast('Orphan File', 'This file has no data. Go to Settings → Repair Database to clean up.', 'warning');
+                showToast('Orphan File', 'No data available. Use Settings → Repair Database.', 'warning');
             } else {
-                showToast('Error', 'Download failed. The file may be corrupted or inaccessible.', 'error');
+                showToast('Error', 'Download failed. File may be corrupted.', 'error');
             }
             return;
         }
@@ -2981,67 +2978,48 @@ SELECT * FROM logs;`
         }
 
         async function repairDatabase() {
-    showToast('Scanning', 'Checking for orphan files...', 'info');
-    
-    try {
-        const files = await dbGetAll('files');
-        const orphanFiles = [];
-        const validFiles = [];
-        
-        for (const file of files) {
-            const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
-            const hasCloudPath = file.cloudPath || file.cloud_path;
-            const hasCloudUrl = file.cloudUrl || file.cloud_url;
+            showToast('Scanning', 'Checking for orphan files...', 'info');
             
-            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
-                orphanFiles.push(file);
-            } else {
-                validFiles.push(file);
-            }
-        }
-        
-        if (orphanFiles.length === 0) {
-            showToast('Complete', 'All files are valid!', 'success');
-            return;
-        }
-        
-        const orphanList = orphanFiles.map(f => `• ${f.name} (${formatBytes(f.size || 0)})`).join('\n');
-        
-        const deleteOrphans = confirm(
-            `Found ${orphanFiles.length} orphan file(s) without downloadable data:\n\n` +
-            orphanList.substring(0, 500) + (orphanList.length > 500 ? '\n...' : '') +
-            `\n\nThese files cannot be downloaded. Delete them?`
-        );
-        
-        if (deleteOrphans) {
-            for (const file of orphanFiles) {
-                // Delete from local
-                await dbDelete('files', file.id);
+            try {
+                const files = await dbGetAll('files');
+                const orphanFiles = [];
                 
-                // Delete from cloud database
-                if (supabaseClient && isOnline) {
-                    try {
-                        await supabaseClient
-                            .from('files')
-                            .delete()
-                            .eq('id', file.id);
-                    } catch (e) {
-                        console.warn('Cloud delete error for', file.name, e);
+                for (const file of files) {
+                    const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
+                    const hasCloudPath = file.cloudPath || file.cloud_path;
+                    const hasCloudUrl = file.cloudUrl || file.cloud_url;
+                    
+                    if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
+                        orphanFiles.push(file);
                     }
                 }
+                
+                if (orphanFiles.length === 0) {
+                    showToast('Complete', 'All files are valid!', 'success');
+                    return;
+                }
+                
+                const orphanNames = orphanFiles.slice(0, 5).map(f => f.name).join(', ');
+                const deleteOrphans = confirm(
+                    `Found ${orphanFiles.length} orphan file(s) without downloadable data:\n${orphanNames}${orphanFiles.length > 5 ? '...' : ''}\n\nThese files cannot be downloaded. Delete them?`
+                );
+                
+                if (deleteOrphans) {
+                    for (const file of orphanFiles) {
+                        await dbDelete('files', file.id);
+                        if (supabaseClient && isOnline) {
+                            await supabaseClient.from('files').delete().eq('id', file.id).catch(() => {});
+                        }
+                    }
+                    await loadFiles();
+                    await updateStats();
+                    showToast('Cleaned', `Removed ${orphanFiles.length} orphan file(s)`, 'success');
+                }
+            } catch (error) {
+                console.error('Repair error:', error);
+                showToast('Error', 'Repair failed', 'error');
             }
-            
-            await loadFiles();
-            await updateStats();
-            showToast('Cleaned', `Removed ${orphanFiles.length} orphan file(s)`, 'success');
-        } else {
-            showToast('Info', `${orphanFiles.length} orphan files remain`, 'warning');
         }
-    } catch (error) {
-        console.error('Repair error:', error);
-        showToast('Error', 'Repair failed: ' + error.message, 'error');
-    }
-}
 
         function showSection(section) {
     // Hide all sections
