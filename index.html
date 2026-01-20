@@ -1287,45 +1287,82 @@ let bucketCheckDone = false;
 let bucketErrorShown = false;
 
 async function ensureBucketExists() {
-    // Only check once per session to avoid spam
     if (bucketCheckDone) return cloudBucketReady;
     
+    console.log('🔍 Checking storage bucket...');
+    
     try {
-        const { data: buckets, error } = await supabaseClient.storage.listBuckets();
+        // Method 1: Try to list files in bucket (works if bucket exists + has SELECT policy)
+        const { data: listData, error: listError } = await supabaseClient.storage
+            .from(CONFIG.STORAGE_BUCKET)
+            .list('', { limit: 1 });
         
-        if (error) {
-            // RLS might block listing - try to access bucket directly
-            const { data: testList, error: testError } = await supabaseClient.storage
-                .from(CONFIG.STORAGE_BUCKET)
-                .list('', { limit: 1 });
-            
-            if (!testError) {
-                console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' accessible`);
-                bucketCheckDone = true;
-                return true;
-            }
-            
-            console.warn('Cannot access storage:', error.message);
+        if (!listError) {
+            console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' ready`);
             bucketCheckDone = true;
-            showBucketSetupOnce();
-            return false;
+            return true;
         }
         
-        const bucketExists = buckets?.some(b => b.name === CONFIG.STORAGE_BUCKET);
+        // Method 2: Try a test upload (works if bucket exists + has INSERT policy)
+        console.log('🔄 Testing bucket with upload...');
+        const testResult = await testBucketAccess();
         
-        if (!bucketExists) {
-            console.warn(`⚠️ Bucket '${CONFIG.STORAGE_BUCKET}' not found`);
+        if (testResult) {
+            console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' verified`);
             bucketCheckDone = true;
-            showBucketSetupOnce();
-            return false;
+            return true;
         }
         
-        console.log(`✅ Storage bucket '${CONFIG.STORAGE_BUCKET}' ready`);
+        // Bucket not accessible
+        console.warn(`⚠️ Cannot access bucket '${CONFIG.STORAGE_BUCKET}'`);
         bucketCheckDone = true;
-        return true;
+        showBucketSetupOnce();
+        return false;
+        
     } catch (e) {
         console.warn('Bucket check error:', e.message);
         bucketCheckDone = true;
+        showBucketSetupOnce();
+        return false;
+    }
+}
+
+async function testBucketAccess() {
+    const testFileName = `.nexus-test-${Date.now()}.txt`;
+    
+    try {
+        // Try uploading a tiny test file
+        const testBlob = new Blob(['test'], { type: 'text/plain' });
+        
+        const { data, error: uploadError } = await supabaseClient.storage
+            .from(CONFIG.STORAGE_BUCKET)
+            .upload(testFileName, testBlob, { upsert: true });
+        
+        if (uploadError) {
+            console.warn('Test upload failed:', uploadError.message);
+            
+            // Check specific error types
+            if (uploadError.message?.toLowerCase().includes('not found')) {
+                return false;
+            }
+            if (uploadError.message?.toLowerCase().includes('policy')) {
+                console.log('💡 Storage policies may need adjustment');
+                return false;
+            }
+            return false;
+        }
+        
+        // Upload succeeded - clean up test file
+        console.log('✅ Test upload succeeded');
+        
+        await supabaseClient.storage
+            .from(CONFIG.STORAGE_BUCKET)
+            .remove([testFileName]);
+        
+        return true;
+        
+    } catch (e) {
+        console.warn('Test upload error:', e.message);
         return false;
     }
 }
