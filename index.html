@@ -861,11 +861,15 @@
         supabase: 1024 * 1024 * 1024,
         github: 1024 * 1024 * 1024
     },
+    SUPABASE: {
+        URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
+        ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk'
+    },
     SUPABASE_URL: 'https://kaysqlmdeuzmhxqbwnpk.supabase.co',
     SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtheXNxbG1kZXV6bWh4cWJ3bnBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjEwNDAsImV4cCI6MjA4NDM5NzA0MH0.Td3HkUynNWXFGy4XLekSdS3FK54786D9WE2TuhH9oQk',
     STORAGE_BUCKET: 'nexus-files',
-    SYNC_INTERVAL: 30000, // 30 seconds
-    USE_CLOUD_PRIMARY: true // Set to true to use cloud as primary storage
+    SYNC_INTERVAL: 30000,
+    USE_CLOUD_PRIMARY: true
 };
 
         // ==================== STATE ====================
@@ -895,7 +899,19 @@
         }
 
         // ==================== FAILSAFE: Hide loader after 5 seconds ====================
-        // ==================== FAILSAFE & ERROR HANDLING ====================
+       // ==================== SUPABASE INITIALIZATION ====================
+function initSupabase() {
+    if (typeof window.supabase !== 'undefined' && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
+        try {
+            supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+            console.log('✅ Supabase client initialized');
+        } catch (e) {
+            console.warn('Supabase init error:', e);
+        }
+    }
+}
+
+// ==================== FAILSAFE & ERROR HANDLING ====================
         // Global error handler to force open app if script crashes
         window.onerror = function(msg, url, line) {
             console.error('Global Error:', msg);
@@ -916,55 +932,43 @@
         // ==================== INITIALIZATION ====================
         async function init() {
     try {
-        await initDB();
-        initSupabase();
-        await loadFiles();
-        await loadSQLTables();
-        await updateStats();
-        await loadActivityLog();
+        // 1. Initialize Database
+        await initDB().catch(e => {
+            console.error('DB Init Failed:', e);
+            showToast('Database Error', 'Using temporary session', 'warning');
+        });
+        
+        // 2. Load Settings
+        await loadSettings();
+        
+        // 3. Try Cloud Connection
+        await tryAutoConnect();
+        
+        // 4. Load all data in parallel
+        await Promise.allSettled([
+            loadFiles(),
+            loadSQLTables(),
+            updateStats(),
+            loadActivityLog()
+        ]);
+        
+        // 5. Initialize UI
         updateOnlineStatus();
         initEventListeners();
         initParticles();
         
+        // 6. Set up event listeners
         window.addEventListener('online', updateOnlineStatus);
         window.addEventListener('offline', updateOnlineStatus);
         
-        // Hide loading screen
-        const loadingOverlay = document.getElementById('loadingOverlay');
-        if (loadingOverlay) {
-            loadingOverlay.style.opacity = '0';
-            setTimeout(() => {
-                loadingOverlay.style.display = 'none';
-            }, 500);
-        }
-            } catch (e) { console.error('UI Init Error', e); }
-
-            // 2. Load Data Safely
-            try {
-                // Initialize IndexedDB
-                await initDB().catch(e => {
-                    console.error('DB Init Failed:', e);
-                    showToast('Database Error', 'Using temporary session', 'warning');
-                });
-                
-                await loadSettings();
-                
-                // Load all data parallel, ignoring failures
-                await Promise.allSettled([
-                    loadFiles(),
-                    loadSQLTables(),
-                    updateStats(),
-                    loadActivityLog(),
-                    tryAutoConnect()
-                ]);
-                
-            } catch (error) {
-                console.error('❌ Core Init Error:', error);
-            } finally {
-                // 3. Reveal App
-                hideLoader();
-            }
-        }
+    } catch (error) {
+        console.error('❌ Init Error:', error);
+        showToast('Error', 'Initialization failed', 'error');
+    } finally {
+        // Always hide loader
+        hideLoader();
+    }
+}
         // ==================== DATABASE ====================
         async function initDB() {
             return new Promise((resolve, reject) => {
@@ -1081,11 +1085,11 @@
 
         // ==================== SETTINGS (FIXED) ====================
         async function loadSettings() {
-            try {
-                const settings = await loadAllSettings();
-                
-                // Load cloud credentials
-                Url = document.getElementById('supabaseUrl');
+    try {
+        const settings = await loadAllSettings();
+        
+        // Load cloud credentials
+        const supabaseUrl = document.getElementById('supabaseUrl');
                 const supabaseKey = document.getElementById('supabaseKey');
                 const githubToken = document.getElementById('githubToken');
                 const githubRepo = document.getElementById('githubRepo');
@@ -1733,9 +1737,7 @@ async function syncFromCloud() {
             // Save metadata to local IndexedDB
             await dbPut('files', fileRecord);
             
-            // Save metadata to cloud database
-            if (supabaseClient && isOnline) {
-                // Save metadata to cloud database
+                        // Save metadata to cloud database
             if (supabaseClient && isOnline) {
                 // Only mark as synced if cloud upload succeeded
                 const cloudSyncData = {
