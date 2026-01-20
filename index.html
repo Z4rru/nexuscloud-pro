@@ -913,16 +913,22 @@ FOR SELECT USING (bucket_id = 'nexus-files');</pre>
             <input type="file" id="importInput" class="hidden" accept=".json">
 
             <script>
-        // ==================== IMMEDIATE FAILSAFE ====================
+               // ==================== IMMEDIATE FAILSAFE ====================
         window.addEventListener('load', function() {
             setTimeout(function() {
                 var loader = document.getElementById('loadingScreen');
-                if (loader) {
+                if (loader && loader.style.display !== 'none') {
                     loader.style.opacity = '0';
                     loader.style.transition = 'opacity 0.3s';
                     setTimeout(function() { loader.style.display = 'none'; }, 300);
                 }
-            }, 3000);
+            }, 2000);
+        });
+        
+        // Catch any errors and still hide loader
+        window.addEventListener('error', function() {
+            var loader = document.getElementById('loadingScreen');
+            if (loader) loader.style.display = 'none';
         });
 
         // ==================== CONFIGURATION ====================
@@ -2426,87 +2432,7 @@ async function uploadFiles(files) {
         }
         
         // Method 2: Download from Supabase storage
-        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
-            try {
-                const { data, error } = await supabaseClient.storage
-                    .from(CONFIG.STORAGE_BUCKET)
-                    .download(cloudPath);
-                
-                if (!error && data) {
-                    blob = data;
-                    downloadUrl = URL.createObjectURL(blob);
-                    shouldRevokeUrl = true;
-                    console.log('✅ Method 2: Downloaded from Supabase');
-                }
-            } catch (e) {
-                console.warn('❌ Method 2 failed:', e.message);
-            }
-        }
-        
-        // Method 3: Use public URL directly
-        if (!downloadUrl && cloudUrl) {
-            try {
-                const response = await fetch(cloudUrl);
-                if (response.ok) {
-                    blob = await response.blob();
-                    downloadUrl = URL.createObjectURL(blob);
-                    shouldRevokeUrl = true;
-                    console.log('✅ Method 3: Downloaded from public URL');
-                }
-            } catch (e) {
-                console.warn('❌ Method 3 failed:', e.message);
-            }
-        }
-        
-        // Method 4: Reconstruct from chunks (for large files)
-        if (!downloadUrl && file.chunks && file.chunks.length > 0) {
-            try {
-                const chunkBlobs = [];
-                for (const chunkId of file.chunks) {
-                    const chunk = await dbGet('chunks', chunkId);
-                    if (chunk?.data) {
-                        const response = await fetch(chunk.data);
-                        chunkBlobs.push(await response.blob());
-                    }
-                }
-                blob = new Blob(chunkBlobs, { type: file.type });
-                downloadUrl = URL.createObjectURL(blob);
-                shouldRevokeUrl = true;
-                console.log('✅ Method 4: Reconstructed from chunks');
-            } catch (e) {
-                console.warn('❌ Method 4 failed:', e.message);
-            }
-        }
-        
-        if (!downloadUrl) {
-            showToast('Error', 'File data not available', 'error');
-            return;
-        }
-        
-        // Trigger download
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = file.name;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        if (shouldRevokeUrl) {
-            setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
-        }
-        
-        await logActivity('download', `Downloaded ${file.name}`);
-        showToast('Success', `${file.name} downloaded`, 'success');
-        
-    } catch (error) {
-        console.error('Download error:', error);
-        showToast('Error', 'Download failed', 'error');
-    }
-}
-        
-        // Method 3: Try signed URL from Supabase
-        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
+              async function deleteFile(id) {
             try {
                 console.log('🔄 Method 3: Generating signed URL');
                 const { data, error } = await supabaseClient.storage
@@ -2651,11 +2577,13 @@ async function uploadFiles(files) {
     }
 }
 
+       }
+
         async function deleteFile(id) {
     const file = await dbGet('files', id);
     if (!file) return;
     
-    if (confirm(`Delete "${file.name}"?`)) {
+    if (!confirm(`Delete "${file.name}"?`)) return;
         // Delete from cloud storage
         if (file.cloudPath && supabaseClient && isOnline) {
             try {
@@ -2681,11 +2609,10 @@ async function uploadFiles(files) {
         
         // Delete from local
         await dbDelete('files', id);
-        await logActivity('delete', `Deleted ${file.name}`);
+                await logActivity('delete', `Deleted ${file.name}`);
         showToast('Deleted', `${file.name} deleted`, 'success');
         await updateStats();
         await loadFiles();
-    }
 }
 
         async function toggleStar(id) {
@@ -3497,46 +3424,6 @@ function getFileCategory(type) {
     if (type.includes('pdf') || type.includes('document') || type.includes('text')) return 'Documents';
     return 'Other';
 }
-            try {
-                const files = await dbGetAll('files');
-                const tables = await dbGetAll('sqlTables');
-                
-                const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
-                const totalRecords = tables.reduce((sum, t) => sum + (t.rows?.length || 0), 0);
-                const maxStorage = CONFIG.MAX_STORAGE[currentProvider];
-                const usedPercent = (totalSize / maxStorage) * 100;
-                
-                // Update elements safely
-                const elements = {
-                    'totalFiles': files.length,
-                    'totalSize': formatBytes(totalSize),
-                    'totalRecords': totalRecords,
-                    'storagePercent': usedPercent.toFixed(1) + '%',
-                    'storageText': `${formatBytes(totalSize)} of ${formatBytes(maxStorage)}`,
-                    'maxStorageDisplay': formatBytes(maxStorage),
-                    'ringPercent': usedPercent.toFixed(1) + '%'
-                };
-                
-                Object.entries(elements).forEach(([id, value]) => {
-                    const el = document.getElementById(id);
-                    if (el) el.textContent = value;
-                });
-                
-                const storageBar = document.getElementById('storageBar');
-                if (storageBar) storageBar.style.width = Math.min(usedPercent, 100) + '%';
-                
-                const ring = document.getElementById('storageRing');
-                if (ring) {
-                    const offset = 251.2 - (251.2 * Math.min(usedPercent, 100) / 100);
-                    ring.style.strokeDashoffset = offset;
-                }
-                
-                updateFileTypesChart(files);
-                updateStorageBreakdown(files);
-            } catch (e) {
-                console.warn('Stats update error:', e);
-            }
-        }
 
         function updateFileTypesChart(files) {
             const types = {};
@@ -3874,7 +3761,7 @@ function getFileCategory(type) {
     if (section === 'database') updateLineNumbers();
 }
 
-        function toggleSidebar() {
+       function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebarOverlay');
     
@@ -3883,16 +3770,16 @@ function getFileCategory(type) {
         return;
     }
     
-    const isHidden = sidebar.classList.contains('-translate-x-full');
+    const isOpen = sidebar.classList.contains('open');
     
-    if (isHidden) {
-        sidebar.classList.remove('-translate-x-full');
-        overlay.classList.remove('hidden');
-        document.body.style.overflow = 'hidden';
-    } else {
-        sidebar.classList.add('-translate-x-full');
+    if (isOpen) {
+        sidebar.classList.remove('open');
         overlay.classList.add('hidden');
         document.body.style.overflow = '';
+    } else {
+        sidebar.classList.add('open');
+        overlay.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
     }
 }
 
