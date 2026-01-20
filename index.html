@@ -1601,7 +1601,7 @@ async function syncFromCloud() {
                     <button onclick="shareFile(${file.id});" class="flex-1 px-4 py-3 glass rounded-xl font-semibold hover:bg-white/10">
                         <i class="fas fa-share mr-2"></i>Share
                     </button>
-                    <button onclick="deleteFile(${file.id}); closeModal();" class="px-4 py-3 glass rounded-xl text-red-400 hover:bg-red-500/20">
+                    <button onclick="deleteFile('${file.id}'); closeModal();" class="px-4 py-3 glass rounded-xl text-red-400 hover:bg-red-500/20">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>
@@ -2506,10 +2506,10 @@ columns.forEach((col, i) => {
                 case '<=': return parseFloat(rowValue) <= parseFloat(value);
                 case '>=': return parseFloat(rowValue) >= parseFloat(value);
                 case 'LIKE': {
-    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
-    return new RegExp(`^${pattern}$`, 'i').test(String(rowValue));
-}
+            const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
+            return new RegExp(`^${pattern}$`, 'i').test(String(rowValue));
+        }
                 case 'IS': return value.toUpperCase() === 'NULL' ? rowValue == null : rowValue != null;
                 default: return false;
             }
@@ -2578,18 +2578,18 @@ columns.forEach((col, i) => {
         }
 
         function loadTemplate(type) {
-            const templates = {
-                users: `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, created_at TEXT);
+        const templates = {
+            users: `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, created_at TEXT);
 INSERT INTO users (id, name, email, created_at) VALUES (1, 'John Doe', 'john@email.com', '2024-01-15');
 SELECT * FROM users;`,
-                products: `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER);
+            products: `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER);
 INSERT INTO products (id, name, price, stock) VALUES (1, 'Laptop', 999.99, 50);
 SELECT * FROM products;`,
-                orders: `CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, total REAL, status TEXT);
+            orders: `CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, total REAL, status TEXT);
 SELECT * FROM orders;`,
-                logs: `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, action TEXT, timestamp TEXT);
+            logs: `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, action TEXT, timestamp TEXT);
 SELECT * FROM logs;`
-            };
+        };
             
             const editor = document.getElementById('sqlEditor');
             if (editor) editor.value = templates[type] || '';
@@ -2951,7 +2951,7 @@ SELECT * FROM logs;`
     document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
     const sectionEl = document.getElementById(`${section}Section`);
     if (sectionEl) sectionEl.classList.remove('hidden');
-    
+
     // Update nav active state
     document.querySelectorAll('.nav-item').forEach(btn => {
         btn.classList.remove('active', 'bg-white/10');
