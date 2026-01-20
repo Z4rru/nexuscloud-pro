@@ -1445,23 +1445,23 @@ async function syncFromCloud() {
                 grid.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6';
                 grid.innerHTML = files.map(file => `
                     <div class="file-card glass rounded-2xl p-4 lg:p-6 cursor-pointer relative group ${selectedFiles.has(file.id) ? 'ring-2 ring-indigo-500' : ''}" 
-                         onclick="handleFileClick(event, ${file.id})" 
-                         oncontextmenu="showContextMenu(event, ${file.id})">
+                         onclick="handleFileClick(event, '${file.id}')" 
+                         oncontextmenu="showContextMenu(event, '${file.id}')">
                         <div class="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <input type="checkbox" class="w-5 h-5 rounded" ${selectedFiles.has(file.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelect(${file.id})">
+                            <input type="checkbox" class="w-5 h-5 rounded" ${selectedFiles.has(file.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelect('${file.id}')">
                         </div>
                         <div class="flex items-start justify-between mb-3">
                             <div class="w-12 h-12 lg:w-14 lg:h-14 rounded-xl ${getFileColor(file.type)} flex items-center justify-center">
                                 <i class="fas ${getFileIcon(file.type)} text-xl lg:text-2xl"></i>
                             </div>
                             <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-    <button onclick="event.stopPropagation(); downloadFile(${file.id})" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
-        <i class="fas fa-download text-indigo-400"></i>
-    </button>
-    <button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
-        <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
-    </button>
-</div>
+                                <button onclick="event.stopPropagation(); downloadFile('${file.id}')" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
+                                    <i class="fas fa-download text-indigo-400"></i>
+                                </button>
+                                <button onclick="event.stopPropagation(); toggleStar('${file.id}')" class="p-2 hover:bg-white/10 rounded-lg">
+                                    <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
+                                </button>
+                            </div>
                         </div>
                         <h4 class="font-semibold truncate text-sm mb-1">${escapeHtml(file.name)}</h4>
                         <p class="text-xs text-gray-400">${formatBytes(file.size || 0)}</p>
@@ -1475,9 +1475,9 @@ async function syncFromCloud() {
                 grid.className = 'space-y-2';
                 grid.innerHTML = files.map(file => `
                     <div class="glass rounded-xl p-4 flex items-center gap-4 hover:bg-white/5 cursor-pointer ${selectedFiles.has(file.id) ? 'ring-2 ring-indigo-500' : ''}"
-                         onclick="handleFileClick(event, ${file.id})"
-                         oncontextmenu="showContextMenu(event, ${file.id})">
-                        <input type="checkbox" class="w-5 h-5 rounded" ${selectedFiles.has(file.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelect(${file.id})">
+                         onclick="handleFileClick(event, '${file.id}')"
+                         oncontextmenu="showContextMenu(event, '${file.id}')">
+                        <input type="checkbox" class="w-5 h-5 rounded" ${selectedFiles.has(file.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelect('${file.id}')">
                         <div class="w-10 h-10 rounded-lg ${getFileColor(file.type)} flex items-center justify-center flex-shrink-0">
                             <i class="fas ${getFileIcon(file.type)}"></i>
                         </div>
@@ -1485,13 +1485,13 @@ async function syncFromCloud() {
                             <p class="font-medium truncate">${escapeHtml(file.name)}</p>
                             <p class="text-xs text-gray-400">${formatBytes(file.size || 0)} • ${formatDate(file.created)}</p>
                         </div>
-                        <button onclick="event.stopPropagation(); downloadFile(${file.id})" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
-    <i class="fas fa-download text-indigo-400"></i>
-</button>
-<button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
-    <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
-</button>
-${file.synced ? '<i class="fas fa-cloud text-green-400"></i>' : '<i class="fas fa-hdd text-gray-500"></i>'}
+                        <button onclick="event.stopPropagation(); downloadFile('${file.id}')" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
+                            <i class="fas fa-download text-indigo-400"></i>
+                        </button>
+                        <button onclick="event.stopPropagation(); toggleStar('${file.id}')" class="p-2 hover:bg-white/10 rounded-lg">
+                            <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
+                        </button>
+                        ${file.synced ? '<i class="fas fa-cloud text-green-400"></i>' : '<i class="fas fa-hdd text-gray-500"></i>'}
                     </div>
                 `).join('');
             }
@@ -1507,7 +1507,7 @@ ${file.synced ? '<i class="fas fa-cloud text-green-400"></i>' : '<i class="fas f
             }
             
             container.innerHTML = files.map(file => `
-                <div class="glass rounded-xl p-4 flex items-center gap-4 hover:bg-white/5 transition-all cursor-pointer" onclick="viewFile(${file.id})">
+                <div class="glass rounded-xl p-4 flex items-center gap-4 hover:bg-white/5 transition-all cursor-pointer" onclick="viewFile('${file.id}')">
                     <div class="w-12 h-12 rounded-xl ${getFileColor(file.type)} flex items-center justify-center flex-shrink-0">
                         <i class="fas ${getFileIcon(file.type)} text-xl"></i>
                     </div>
