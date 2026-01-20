@@ -2394,20 +2394,14 @@ async function uploadFiles(files) {
             });
         }
 
-        async function downloadFile(id) {
+      async function downloadFile(id) {
     const file = await dbGet('files', id);
     if (!file) {
         showToast('Error', 'File not found', 'error');
         return;
     }
     
-    console.log('📥 Download attempt for:', file.name, {
-        hasData: !!file.data,
-        cloudUrl: file.cloudUrl || file.cloud_url,
-        cloudPath: file.cloudPath || file.cloud_path,
-        id: file.id
-    });
-    
+    console.log('📥 Download attempt for:', file.name);
     showToast('Downloading', `Preparing ${file.name}...`, 'info');
     
     let downloadUrl = null;
@@ -2418,7 +2412,7 @@ async function uploadFiles(files) {
     const cloudUrl = file.cloudUrl || file.cloud_url;
     
     try {
-        // Method 1: Use local data if available (fastest)
+        // Method 1: Use local data if available
         if (file.data && typeof file.data === 'string' && file.data.startsWith('data:')) {
             try {
                 const response = await fetch(file.data);
@@ -2432,65 +2426,52 @@ async function uploadFiles(files) {
         }
         
         // Method 2: Download from Supabase storage
-              async function deleteFile(id) {
+        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
             try {
-                console.log('🔄 Method 3: Generating signed URL');
                 const { data, error } = await supabaseClient.storage
                     .from(CONFIG.STORAGE_BUCKET)
-                    .createSignedUrl(cloudPath, 3600);
+                    .download(cloudPath);
                 
-                if (!error && data?.signedUrl) {
-                    // Fetch the blob using signed URL
-                    const response = await fetch(data.signedUrl);
-                    if (response.ok) {
-                        blob = await response.blob();
-                        downloadUrl = URL.createObjectURL(blob);
-                        shouldRevokeUrl = true;
-                        console.log('✅ Method 3: Downloaded via signed URL');
-                    }
-                } else if (error) {
-                    console.warn('❌ Method 3 error:', error.message);
+                if (!error && data) {
+                    blob = data;
+                    downloadUrl = URL.createObjectURL(blob);
+                    shouldRevokeUrl = true;
+                    console.log('✅ Method 2: Downloaded from Supabase');
+                }
+            } catch (e) {
+                console.warn('❌ Method 2 failed:', e.message);
+            }
+        }
+        
+        // Method 3: Use public URL directly
+        if (!downloadUrl && cloudUrl && isOnline) {
+            try {
+                const response = await fetch(cloudUrl);
+                if (response.ok) {
+                    blob = await response.blob();
+                    downloadUrl = URL.createObjectURL(blob);
+                    shouldRevokeUrl = true;
+                    console.log('✅ Method 3: Downloaded from public URL');
                 }
             } catch (e) {
                 console.warn('❌ Method 3 failed:', e.message);
             }
         }
         
-        // Method 4: Try to list and find the file in storage
-        if (!downloadUrl && supabaseClient && isOnline) {
+        // Method 4: Try signed URL
+        if (!downloadUrl && cloudPath && supabaseClient && isOnline) {
             try {
-                console.log('🔄 Method 4: Searching for file in storage');
-                const folder = file.folder || 'root';
-                const { data: files, error } = await supabaseClient.storage
+                const { data, error } = await supabaseClient.storage
                     .from(CONFIG.STORAGE_BUCKET)
-                    .list(folder);
+                    .createSignedUrl(cloudPath, 3600);
                 
-                if (!error && files) {
-                    // Find file that matches the name
-                    const matchingFile = files.find(f => 
-                        f.name.includes(file.name) || 
-                        f.name.includes(file.id)
-                    );
-                    
-                    if (matchingFile) {
-                        const fullPath = `${folder}/${matchingFile.name}`;
-                        console.log('🔄 Found file at:', fullPath);
-                        
-                        const { data: blobData, error: dlError } = await supabaseClient.storage
-                            .from(CONFIG.STORAGE_BUCKET)
-                            .download(fullPath);
-                        
-                        if (!dlError && blobData) {
-                            blob = blobData;
-                            downloadUrl = URL.createObjectURL(blob);
-                            shouldRevokeUrl = true;
-                            console.log('✅ Method 4: Found and downloaded file');
-                            
-                            // Update the file record with correct path
-                            file.cloudPath = fullPath;
-                            file.cloud_path = fullPath;
-                            await dbPut('files', file);
-                        }
+                if (!error && data?.signedUrl) {
+                    const response = await fetch(data.signedUrl);
+                    if (response.ok) {
+                        blob = await response.blob();
+                        downloadUrl = URL.createObjectURL(blob);
+                        shouldRevokeUrl = true;
+                        console.log('✅ Method 4: Downloaded via signed URL');
                     }
                 }
             } catch (e) {
@@ -2498,340 +2479,287 @@ async function uploadFiles(files) {
             }
         }
         
-        // Method 5: Direct public URL (last resort, may fail due to CORS)
-        if (!downloadUrl && cloudUrl && isOnline) {
-            try {
-                console.log('🔄 Method 5: Trying direct URL:', cloudUrl);
-                const response = await fetch(cloudUrl, { mode: 'cors' });
-                if (response.ok) {
-                    blob = await response.blob();
-                    downloadUrl = URL.createObjectURL(blob);
-                    shouldRevokeUrl = true;
-                    console.log('✅ Method 5: Using direct cloud URL');
-                }
-            } catch (e) {
-                console.warn('❌ Method 5 failed (CORS?):', e.message);
-            }
-        }
-        
         if (!downloadUrl) {
-            console.error('❌ All download methods failed for file:', file);
-            const hasLocalData = file.data && typeof file.data === 'string' && file.data.startsWith('data:');
-            const hasCloudPath = file.cloudPath || file.cloud_path;
-            const hasCloudUrl = file.cloudUrl || file.cloud_url;
-            
-            let errorMsg = 'Download failed. ';
-            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
-                errorMsg = 'This is an orphan file with no data. ';
-                showToast('Orphan File', errorMsg + 'Go to Settings → Repair Database to clean up.', 'warning');
-            } else if (!isOnline && !hasLocalData) {
-                errorMsg = 'File is cloud-only and you are offline.';
-                showToast('Offline', errorMsg, 'warning');
-            } else {
-                errorMsg += 'The file may be corrupted or the storage bucket may not exist.';
-                showToast('Error', errorMsg, 'error');
-            }
-            
-            // Offer to delete the orphan file
-            if (!hasLocalData && !hasCloudPath && !hasCloudUrl) {
-                if (confirm(`"${file.name}" has no data and cannot be downloaded.\n\nDelete this orphan file record?`)) {
-                    await dbDelete('files', file.id);
-                    if (supabaseClient && isOnline) {
-                        try {
-                            await supabaseClient.from('files').delete().eq('id', file.id);
-                        } catch (e) {}
-                    }
-                    showToast('Deleted', 'Orphan file removed', 'success');
-                    await loadFiles();
-                }
-            }
+            showToast('Error', 'File data not available', 'error');
             return;
         }
         
-        // Create download link
+        // Trigger download
         const a = document.createElement('a');
         a.href = downloadUrl;
         a.download = file.name || 'download';
         a.style.display = 'none';
         document.body.appendChild(a);
-        
-        // Trigger download
         a.click();
+        document.body.removeChild(a);
         
-        // Cleanup
-        setTimeout(() => {
-            if (document.body.contains(a)) {
-                document.body.removeChild(a);
-            }
-            if (shouldRevokeUrl && downloadUrl) {
-                URL.revokeObjectURL(downloadUrl);
-            }
-        }, 1000);
+        if (shouldRevokeUrl) {
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+        }
         
         await logActivity('download', `Downloaded ${file.name}`);
-        showToast('Success', `${file.name} download started`, 'success');
+        showToast('Success', `${file.name} downloaded`, 'success');
         
     } catch (error) {
-        console.error('❌ Download error:', error);
-        showToast('Error', 'Download failed: ' + (error.message || 'Unknown error'), 'error');
+        console.error('Download error:', error);
+        showToast('Error', 'Download failed', 'error');
     }
 }
 
-       }
-
-        async function deleteFile(id) {
+async function deleteFile(id) {
     const file = await dbGet('files', id);
     if (!file) return;
     
     if (!confirm(`Delete "${file.name}"?`)) return;
-        // Delete from cloud storage
-        if (file.cloudPath && supabaseClient && isOnline) {
-            try {
-                await supabaseClient.storage
-                    .from(CONFIG.STORAGE_BUCKET)
-                    .remove([file.cloudPath]);
-            } catch (e) {
-                console.warn('Cloud delete error:', e);
-            }
+    
+    // Delete from cloud storage
+    if (file.cloudPath && supabaseClient && isOnline) {
+        try {
+            await supabaseClient.storage
+                .from(CONFIG.STORAGE_BUCKET)
+                .remove([file.cloudPath]);
+        } catch (e) {
+            console.warn('Cloud delete error:', e);
         }
-        
-        // Delete from cloud database
-        if (supabaseClient && isOnline) {
-            try {
-                await supabaseClient
-                    .from('files')
-                    .delete()
-                    .eq('id', id);
-            } catch (e) {
-                console.warn('Cloud DB delete error:', e);
-            }
+    }
+    
+    // Delete from cloud database
+    if (supabaseClient && isOnline) {
+        try {
+            await supabaseClient
+                .from('files')
+                .delete()
+                .eq('id', id);
+        } catch (e) {
+            console.warn('Cloud DB delete error:', e);
         }
-        
-        // Delete from local
-        await dbDelete('files', id);
-                await logActivity('delete', `Deleted ${file.name}`);
-        showToast('Deleted', `${file.name} deleted`, 'success');
-        await updateStats();
-        await loadFiles();
+    }
+    
+    // Delete from local
+    await dbDelete('files', id);
+    await logActivity('delete', `Deleted ${file.name}`);
+    showToast('Deleted', `${file.name} deleted`, 'success');
+    await updateStats();
+    await loadFiles();
 }
 
-        async function toggleStar(id) {
-            const file = await dbGet('files', id);
-            if (!file) return;
-            
-            file.starred = !file.starred;
-            await dbPut('files', file);
-            loadFiles();
-        }
+async function toggleStar(id) {
+    const file = await dbGet('files', id);
+    if (!file) return;
+    
+    file.starred = !file.starred;
+    await dbPut('files', file);
+    loadFiles();
+}
 
-        async function shareFile(id) {
-            const file = await dbGet('files', id);
-            if (!file) return;
-            
-            const shareId = btoa(`${file.id}-${Date.now()}`).substring(0, 16);
-            const shareLink = `${window.location.origin}${window.location.pathname}?share=${shareId}`;
-            
-            await dbAdd('shared', {
-                fileId: id,
-                shareId,
-                fileName: file.name,
-                created: new Date().toISOString()
-            });
-            
-            try {
-                await navigator.clipboard.writeText(shareLink);
-                showToast('Link Copied', 'Share link copied to clipboard!', 'success');
-            } catch (e) {
-                showModal('Share Link', `<input type="text" value="${shareLink}" class="w-full p-3 glass rounded-lg" readonly onclick="this.select()">`);
+async function shareFile(id) {
+    const file = await dbGet('files', id);
+    if (!file) return;
+    
+    const shareId = btoa(`${file.id}-${Date.now()}`).substring(0, 16);
+    const shareLink = `${window.location.origin}${window.location.pathname}?share=${shareId}`;
+    
+    await dbAdd('shared', {
+        fileId: id,
+        shareId,
+        fileName: file.name,
+        created: new Date().toISOString()
+    });
+    
+    try {
+        await navigator.clipboard.writeText(shareLink);
+        showToast('Link Copied', 'Share link copied to clipboard!', 'success');
+    } catch (e) {
+        showModal('Share Link', `<input type="text" value="${shareLink}" class="w-full p-3 glass rounded-lg" readonly onclick="this.select()">`);
+    }
+    
+    await logActivity('share', `Shared ${file.name}`);
+}
+
+function createFolder() {
+    const name = prompt('Enter folder name:');
+    if (!name?.trim()) return;
+    
+    const folderData = {
+        name: name.trim(),
+        type: 'folder',
+        size: 0,
+        folder: currentFolder,
+        created: new Date().toISOString(),
+        modified: new Date().toISOString(),
+        starred: false,
+        synced: false
+    };
+    
+    dbAdd('files', folderData).then(() => {
+        showToast('Created', `Folder "${name}" created`, 'success');
+        logActivity('create', `Created folder ${name}`);
+        loadFiles();
+    });
+}
+
+function navigateToFolder(folderId) {
+    currentFolder = folderId;
+    loadFiles();
+}
+
+function updateBreadcrumb() {
+    const el = document.getElementById('currentPath');
+    if (el) el.textContent = currentFolder ? 'Subfolder' : 'Root';
+}
+
+function toggleSelect(id) {
+    if (selectedFiles.has(id)) {
+        selectedFiles.delete(id);
+    } else {
+        selectedFiles.add(id);
+    }
+    updateSelectionUI();
+    loadFiles();
+}
+
+function clearSelection() {
+    selectedFiles.clear();
+    updateSelectionUI();
+    loadFiles();
+}
+
+function updateSelectionUI() {
+    const bar = document.getElementById('selectionBar');
+    if (!bar) return;
+    
+    if (selectedFiles.size > 0) {
+        bar.classList.remove('hidden');
+        const countEl = document.getElementById('selectedCount');
+        if (countEl) countEl.textContent = `${selectedFiles.size} item(s) selected`;
+    } else {
+        bar.classList.add('hidden');
+    }
+}
+
+async function deleteSelected() {
+    if (!confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
+    
+    for (const id of selectedFiles) {
+        await dbDelete('files', id);
+    }
+    
+    showToast('Deleted', `${selectedFiles.size} file(s) deleted`, 'success');
+    selectedFiles.clear();
+    updateSelectionUI();
+    await updateStats();
+    await loadFiles();
+}
+
+async function downloadSelected() {
+    for (const id of selectedFiles) {
+        await downloadFile(id);
+    }
+    clearSelection();
+}
+
+function setView(view) {
+    currentView = view;
+    const gridBtn = document.getElementById('gridViewBtn');
+    const listBtn = document.getElementById('listViewBtn');
+    
+    if (gridBtn) gridBtn.className = `p-3 glass rounded-xl ${view === 'grid' ? 'bg-white/10' : 'hover:bg-white/10'}`;
+    if (listBtn) listBtn.className = `p-3 glass rounded-xl ${view === 'list' ? 'bg-white/10' : 'hover:bg-white/10'}`;
+    
+    loadFiles();
+}
+
+function filterFiles() { loadFiles(); }
+function sortFiles() { loadFiles(); }
+
+// Context Menu
+function showContextMenu(event, id) {
+    event.preventDefault();
+    contextMenuTarget = id;
+    
+    const menu = document.getElementById('contextMenu');
+    if (menu) {
+        menu.style.left = `${event.clientX}px`;
+        menu.style.top = `${event.clientY}px`;
+        menu.classList.remove('hidden');
+    }
+}
+
+function hideContextMenu() {
+    const menu = document.getElementById('contextMenu');
+    if (menu) menu.classList.add('hidden');
+}
+
+async function contextAction(action) {
+    hideContextMenu();
+    if (!contextMenuTarget) return;
+    
+    switch (action) {
+        case 'open':
+            viewFile(contextMenuTarget);
+            break;
+        case 'download':
+            downloadFile(contextMenuTarget);
+            break;
+        case 'share':
+            shareFile(contextMenuTarget);
+            break;
+        case 'rename':
+            const file = await dbGet('files', contextMenuTarget);
+            if (file) {
+                const newName = prompt('Enter new name:', file.name);
+                if (newName?.trim()) {
+                    file.name = newName.trim();
+                    file.modified = new Date().toISOString();
+                    await dbPut('files', file);
+                    loadFiles();
+                    showToast('Renamed', 'File renamed successfully', 'success');
+                }
             }
-            
-            await logActivity('share', `Shared ${file.name}`);
-        }
+            break;
+        case 'delete':
+            deleteFile(contextMenuTarget);
+            break;
+    }
+}
 
-        function createFolder() {
-            const name = prompt('Enter folder name:');
-            if (!name?.trim()) return;
-            
-            const folderData = {
-                name: name.trim(),
-                type: 'folder',
-                size: 0,
-                folder: currentFolder,
-                created: new Date().toISOString(),
-                modified: new Date().toISOString(),
-                starred: false,
-                synced: false
-            };
-            
-            dbAdd('files', folderData).then(() => {
-                showToast('Created', `Folder "${name}" created`, 'success');
-                logActivity('create', `Created folder ${name}`);
-                loadFiles();
-            });
-        }
+// ==================== SQL DATABASE ====================
+async function loadSQLTables() {
+    try {
+        const tables = await dbGetAll('sqlTables');
+        sqlTables = {};
+        tables.forEach(t => sqlTables[t.name] = t);
+        renderTables();
+    } catch (e) {
+        console.warn('Error loading SQL tables:', e);
+    }
+}
 
-        function navigateToFolder(folderId) {
-            currentFolder = folderId;
-            loadFiles();
-        }
+function executeSQL() {
+    const editor = document.getElementById('sqlEditor');
+    const query = editor?.value?.trim();
+    if (!query) return;
+    
+    const startTime = performance.now();
+    
+    try {
+        const result = processSQL(query);
+        const endTime = performance.now();
+        
+        displayResults(result);
+        const timeEl = document.getElementById('queryTime');
+        if (timeEl) timeEl.textContent = `${(endTime - startTime).toFixed(2)}ms`;
+        
+        sqlHistory.unshift({ query, timestamp: new Date().toISOString() });
+        if (sqlHistory.length > 50) sqlHistory.pop();
+        
+        logActivity('sql', `Executed: ${query.substring(0, 40)}...`);
+    } catch (error) {
+        displayResults({ error: error.message });
+    }
+}
 
-        function updateBreadcrumb() {
-            const el = document.getElementById('currentPath');
-            if (el) el.textContent = currentFolder ? 'Subfolder' : 'Root';
-        }
-
-        function toggleSelect(id) {
-            if (selectedFiles.has(id)) {
-                selectedFiles.delete(id);
-            } else {
-                selectedFiles.add(id);
-            }
-            updateSelectionUI();
-            loadFiles();
-        }
-
-        function clearSelection() {
-            selectedFiles.clear();
-            updateSelectionUI();
-            loadFiles();
-        }
-
-        function updateSelectionUI() {
-            const bar = document.getElementById('selectionBar');
-            if (!bar) return;
-            
-            if (selectedFiles.size > 0) {
-                bar.classList.remove('hidden');
-                const countEl = document.getElementById('selectedCount');
-                if (countEl) countEl.textContent = `${selectedFiles.size} item(s) selected`;
-            } else {
-                bar.classList.add('hidden');
-            }
-        }
-
-        async function deleteSelected() {
-            if (!confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
-            
-            for (const id of selectedFiles) {
-                await dbDelete('files', id);
-            }
-            
-            showToast('Deleted', `${selectedFiles.size} file(s) deleted`, 'success');
-            selectedFiles.clear();
-            updateSelectionUI();
-            await updateStats();
-            await loadFiles();
-        }
-
-        async function downloadSelected() {
-            for (const id of selectedFiles) {
-                await downloadFile(id);
-            }
-            clearSelection();
-        }
-
-        function setView(view) {
-            currentView = view;
-            const gridBtn = document.getElementById('gridViewBtn');
-            const listBtn = document.getElementById('listViewBtn');
-            
-            if (gridBtn) gridBtn.className = `p-3 glass rounded-xl ${view === 'grid' ? 'bg-white/10' : 'hover:bg-white/10'}`;
-            if (listBtn) listBtn.className = `p-3 glass rounded-xl ${view === 'list' ? 'bg-white/10' : 'hover:bg-white/10'}`;
-            
-            loadFiles();
-        }
-
-        function filterFiles() { loadFiles(); }
-        function sortFiles() { loadFiles(); }
-
-        // Context Menu
-        function showContextMenu(event, id) {
-            event.preventDefault();
-            contextMenuTarget = id;
-            
-            const menu = document.getElementById('contextMenu');
-            if (menu) {
-                menu.style.left = `${event.clientX}px`;
-                menu.style.top = `${event.clientY}px`;
-                menu.classList.remove('hidden');
-            }
-        }
-
-        function hideContextMenu() {
-            const menu = document.getElementById('contextMenu');
-            if (menu) menu.classList.add('hidden');
-        }
-
-        async function contextAction(action) {
-            hideContextMenu();
-            if (!contextMenuTarget) return;
-            
-            switch (action) {
-                case 'open':
-                    viewFile(contextMenuTarget);
-                    break;
-                case 'download':
-                    downloadFile(contextMenuTarget);
-                    break;
-                case 'share':
-                    shareFile(contextMenuTarget);
-                    break;
-                case 'rename':
-                    const file = await dbGet('files', contextMenuTarget);
-                    if (file) {
-                        const newName = prompt('Enter new name:', file.name);
-                        if (newName?.trim()) {
-                            file.name = newName.trim();
-                            file.modified = new Date().toISOString();
-                            await dbPut('files', file);
-                            loadFiles();
-                            showToast('Renamed', 'File renamed successfully', 'success');
-                        }
-                    }
-                    break;
-                case 'delete':
-                    deleteFile(contextMenuTarget);
-                    break;
-            }
-        }
-
-        // ==================== SQL DATABASE ====================
-        async function loadSQLTables() {
-            try {
-                const tables = await dbGetAll('sqlTables');
-                sqlTables = {};
-                tables.forEach(t => sqlTables[t.name] = t);
-                renderTables();
-            } catch (e) {
-                console.warn('Error loading SQL tables:', e);
-            }
-        }
-
-        function executeSQL() {
-            const editor = document.getElementById('sqlEditor');
-            const query = editor?.value?.trim();
-            if (!query) return;
-            
-            const startTime = performance.now();
-            
-            try {
-                const result = processSQL(query);
-                const endTime = performance.now();
-                
-                displayResults(result);
-                const timeEl = document.getElementById('queryTime');
-                if (timeEl) timeEl.textContent = `${(endTime - startTime).toFixed(2)}ms`;
-                
-                sqlHistory.unshift({ query, timestamp: new Date().toISOString() });
-                if (sqlHistory.length > 50) sqlHistory.pop();
-                
-                logActivity('sql', `Executed: ${query.substring(0, 40)}...`);
-            } catch (error) {
-                displayResults({ error: error.message });
-            }
-        }
-
-       function processSQL(query) {
+function processSQL(query) {
     const upperQuery = query.toUpperCase().trim();
     
     let result;
@@ -2875,405 +2803,405 @@ async function syncSQLTablesToCloud() {
     }
 }
 
-        function createTable(query) {
-            const match = query.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.+)\)/is);
-            if (!match) throw new Error('Invalid CREATE TABLE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            
-            if (sqlTables[tableName]) {
-                if (query.toUpperCase().includes('IF NOT EXISTS')) {
-                    return { message: `Table '${tableName}' already exists` };
-                }
-                throw new Error(`Table '${tableName}' already exists`);
-            }
-            
-            const columns = match[2].split(',').map(col => {
-                const parts = col.trim().split(/\s+/);
-                return { name: parts[0], type: parts[1] || 'TEXT', constraints: parts.slice(2).join(' ').toUpperCase() };
-            });
-            
-            sqlTables[tableName] = { name: tableName, columns, rows: [], created: new Date().toISOString() };
-            dbPut('sqlTables', sqlTables[tableName]);
-            renderTables();
-            updateStats();
-            
-            return { message: `Table '${tableName}' created with ${columns.length} column(s)`, columns };
+function createTable(query) {
+    const match = query.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.+)\)/is);
+    if (!match) throw new Error('Invalid CREATE TABLE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    
+    if (sqlTables[tableName]) {
+        if (query.toUpperCase().includes('IF NOT EXISTS')) {
+            return { message: `Table '${tableName}' already exists` };
         }
-
-        function insertInto(query) {
-            const match = query.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)/is);
-            if (!match) throw new Error('Invalid INSERT syntax');
-            
-            const tableName = match[1].toLowerCase();
-            const columns = match[2].split(',').map(c => c.trim());
-            const values = match[3].match(/(?:[^,'"]+|'[^']*'|"[^"]*")+/g).map(v => v.trim().replace(/^['"]|['"]$/g, ''));
-            
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            if (columns.length !== values.length) throw new Error('Column count mismatch');
-            
-            const row = Object.create(null);
-row._id = Date.now();
-const forbiddenKeys = ['__proto__', 'constructor', 'prototype'];
-columns.forEach((col, i) => {
-    if (!forbiddenKeys.includes(col.toLowerCase())) {
-        row[col] = values[i];
+        throw new Error(`Table '${tableName}' already exists`);
     }
-});
-            
-            sqlTables[tableName].rows.push(row);
-            dbPut('sqlTables', sqlTables[tableName]);
-            updateStats();
-            
-            return { message: `1 row inserted into '${tableName}'` };
-        }
+    
+    const columns = match[2].split(',').map(col => {
+        const parts = col.trim().split(/\s+/);
+        return { name: parts[0], type: parts[1] || 'TEXT', constraints: parts.slice(2).join(' ').toUpperCase() };
+    });
+    
+    sqlTables[tableName] = { name: tableName, columns, rows: [], created: new Date().toISOString() };
+    dbPut('sqlTables', sqlTables[tableName]);
+    renderTables();
+    updateStats();
+    
+    return { message: `Table '${tableName}' created with ${columns.length} column(s)`, columns };
+}
 
-        function selectFrom(query) {
-            const match = query.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(\w+)(?:\s+(ASC|DESC))?)?(?:\s+LIMIT\s+(\d+))?$/is);
-            if (!match) throw new Error('Invalid SELECT syntax');
-            
-            const columns = match[1].trim();
-            const tableName = match[2].toLowerCase();
-            const whereClause = match[3];
-            const orderBy = match[4];
-            const orderDir = match[5]?.toUpperCase() || 'ASC';
-            const limit = match[6] ? parseInt(match[6]) : null;
-            
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            
-            let rows = [...sqlTables[tableName].rows];
-            
-            if (whereClause) {
-                const conditions = parseWhereClause(whereClause);
-                rows = rows.filter(row => evaluateConditions(row, conditions));
-            }
-            
-            if (orderBy) {
-                rows.sort((a, b) => {
-                    const aVal = a[orderBy], bVal = b[orderBy];
-                    const cmp = typeof aVal === 'number' ? aVal - bVal : String(aVal).localeCompare(String(bVal));
-                    return orderDir === 'DESC' ? -cmp : cmp;
+function insertInto(query) {
+    const match = query.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)/is);
+    if (!match) throw new Error('Invalid INSERT syntax');
+    
+    const tableName = match[1].toLowerCase();
+    const columns = match[2].split(',').map(c => c.trim());
+    const values = match[3].match(/(?:[^,'"]+|'[^']*'|"[^"]*")+/g).map(v => v.trim().replace(/^['"]|['"]$/g, ''));
+    
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    if (columns.length !== values.length) throw new Error('Column count mismatch');
+    
+    const row = Object.create(null);
+    row._id = Date.now();
+    const forbiddenKeys = ['__proto__', 'constructor', 'prototype'];
+    columns.forEach((col, i) => {
+        if (!forbiddenKeys.includes(col.toLowerCase())) {
+            row[col] = values[i];
+        }
+    });
+    
+    sqlTables[tableName].rows.push(row);
+    dbPut('sqlTables', sqlTables[tableName]);
+    updateStats();
+    
+    return { message: `1 row inserted into '${tableName}'` };
+}
+
+function selectFrom(query) {
+    const match = query.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(\w+)(?:\s+(ASC|DESC))?)?(?:\s+LIMIT\s+(\d+))?$/is);
+    if (!match) throw new Error('Invalid SELECT syntax');
+    
+    const columns = match[1].trim();
+    const tableName = match[2].toLowerCase();
+    const whereClause = match[3];
+    const orderBy = match[4];
+    const orderDir = match[5]?.toUpperCase() || 'ASC';
+    const limit = match[6] ? parseInt(match[6]) : null;
+    
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    
+    let rows = [...sqlTables[tableName].rows];
+    
+    if (whereClause) {
+        const conditions = parseWhereClause(whereClause);
+        rows = rows.filter(row => evaluateConditions(row, conditions));
+    }
+    
+    if (orderBy) {
+        rows.sort((a, b) => {
+            const aVal = a[orderBy], bVal = b[orderBy];
+            const cmp = typeof aVal === 'number' ? aVal - bVal : String(aVal).localeCompare(String(bVal));
+            return orderDir === 'DESC' ? -cmp : cmp;
+        });
+    }
+    
+    if (limit) rows = rows.slice(0, limit);
+    
+    let resultColumns;
+    if (columns === '*') {
+        resultColumns = sqlTables[tableName].columns.map(c => c.name);
+    } else {
+        resultColumns = columns.split(',').map(c => c.trim());
+        rows = rows.map(row => {
+            const newRow = {};
+            resultColumns.forEach(col => newRow[col] = row[col]);
+            return newRow;
+        });
+    }
+    
+    return { rows, columns: resultColumns };
+}
+
+function updateTable(query) {
+    const match = query.match(/UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?$/is);
+    if (!match) throw new Error('Invalid UPDATE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    const setClause = match[2];
+    const whereClause = match[3];
+    
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    
+    const updates = {};
+    setClause.split(',').forEach(s => {
+        const [col, val] = s.split('=').map(x => x.trim());
+        updates[col] = val.replace(/^['"]|['"]$/g, '');
+    });
+    
+    let count = 0;
+    sqlTables[tableName].rows.forEach(row => {
+        if (!whereClause || evaluateConditions(row, parseWhereClause(whereClause))) {
+            Object.assign(row, updates);
+            count++;
+        }
+    });
+    
+    dbPut('sqlTables', sqlTables[tableName]);
+    return { message: `${count} row(s) updated` };
+}
+
+function deleteFrom(query) {
+    const match = query.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/is);
+    if (!match) throw new Error('Invalid DELETE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    const whereClause = match[2];
+    
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    
+    const before = sqlTables[tableName].rows.length;
+    if (whereClause) {
+        const conditions = parseWhereClause(whereClause);
+        sqlTables[tableName].rows = sqlTables[tableName].rows.filter(row => !evaluateConditions(row, conditions));
+    } else {
+        sqlTables[tableName].rows = [];
+    }
+    
+    dbPut('sqlTables', sqlTables[tableName]);
+    updateStats();
+    return { message: `${before - sqlTables[tableName].rows.length} row(s) deleted` };
+}
+
+function dropTable(query) {
+    const match = query.match(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)/i);
+    if (!match) throw new Error('Invalid DROP TABLE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    
+    if (!sqlTables[tableName]) {
+        if (query.toUpperCase().includes('IF EXISTS')) {
+            return { message: `Table '${tableName}' does not exist` };
+        }
+        throw new Error(`Table '${tableName}' does not exist`);
+    }
+    
+    delete sqlTables[tableName];
+    dbDelete('sqlTables', tableName);
+    renderTables();
+    updateStats();
+    
+    return { message: `Table '${tableName}' dropped` };
+}
+
+function truncateTable(query) {
+    const match = query.match(/TRUNCATE\s+(?:TABLE\s+)?(\w+)/i);
+    if (!match) throw new Error('Invalid TRUNCATE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    
+    const count = sqlTables[tableName].rows.length;
+    sqlTables[tableName].rows = [];
+    dbPut('sqlTables', sqlTables[tableName]);
+    
+    return { message: `Table '${tableName}' truncated. ${count} row(s) removed.` };
+}
+
+function describeTable(query) {
+    const match = query.match(/(?:DESCRIBE|DESC)\s+(\w+)/i);
+    if (!match) throw new Error('Invalid DESCRIBE syntax');
+    
+    const tableName = match[1].toLowerCase();
+    if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
+    
+    return { 
+        rows: sqlTables[tableName].columns.map(c => ({
+            column: c.name, type: c.type, constraints: c.constraints || ''
+        })),
+        columns: ['column', 'type', 'constraints']
+    };
+}
+
+function showTables() {
+    const tables = Object.keys(sqlTables).map(name => ({
+        table_name: name,
+        rows: sqlTables[name].rows.length,
+        columns: sqlTables[name].columns.length
+    }));
+    return { rows: tables, columns: ['table_name', 'rows', 'columns'] };
+}
+
+function parseWhereClause(clause) {
+    const conditions = [];
+    const parts = clause.split(/\s+(AND|OR)\s+/i);
+    
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i].trim();
+        if (part.toUpperCase() === 'AND' || part.toUpperCase() === 'OR') {
+            conditions.push({ type: part.toUpperCase() });
+        } else {
+            const match = part.match(/(\w+)\s*(=|!=|<>|<|>|<=|>=|LIKE|IS)\s*(.+)/i);
+            if (match) {
+                conditions.push({
+                    column: match[1],
+                    operator: match[2].toUpperCase(),
+                    value: match[3].replace(/^['"]|['"]$/g, '')
                 });
             }
-            
-            if (limit) rows = rows.slice(0, limit);
-            
-            let resultColumns;
-            if (columns === '*') {
-                resultColumns = sqlTables[tableName].columns.map(c => c.name);
-            } else {
-                resultColumns = columns.split(',').map(c => c.trim());
-                rows = rows.map(row => {
-                    const newRow = {};
-                    resultColumns.forEach(col => newRow[col] = row[col]);
-                    return newRow;
-                });
-            }
-            
-            return { rows, columns: resultColumns };
         }
+    }
+    return conditions;
+}
 
-        function updateTable(query) {
-            const match = query.match(/UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?$/is);
-            if (!match) throw new Error('Invalid UPDATE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            const setClause = match[2];
-            const whereClause = match[3];
-            
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            
-            const updates = {};
-            setClause.split(',').forEach(s => {
-                const [col, val] = s.split('=').map(x => x.trim());
-                updates[col] = val.replace(/^['"]|['"]$/g, '');
-            });
-            
-            let count = 0;
-            sqlTables[tableName].rows.forEach(row => {
-                if (!whereClause || evaluateConditions(row, parseWhereClause(whereClause))) {
-                    Object.assign(row, updates);
-                    count++;
-                }
-            });
-            
-            dbPut('sqlTables', sqlTables[tableName]);
-            return { message: `${count} row(s) updated` };
+function evaluateConditions(row, conditions) {
+    let result = true;
+    let nextOp = 'AND';
+    
+    for (const cond of conditions) {
+        if (cond.type) {
+            nextOp = cond.type;
+        } else {
+            const evalResult = evaluateCondition(row, cond);
+            result = nextOp === 'AND' ? result && evalResult : result || evalResult;
         }
+    }
+    return result;
+}
 
-        function deleteFrom(query) {
-            const match = query.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/is);
-            if (!match) throw new Error('Invalid DELETE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            const whereClause = match[2];
-            
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            
-            const before = sqlTables[tableName].rows.length;
-            if (whereClause) {
-                const conditions = parseWhereClause(whereClause);
-                sqlTables[tableName].rows = sqlTables[tableName].rows.filter(row => !evaluateConditions(row, conditions));
-            } else {
-                sqlTables[tableName].rows = [];
-            }
-            
-            dbPut('sqlTables', sqlTables[tableName]);
-            updateStats();
-            return { message: `${before - sqlTables[tableName].rows.length} row(s) deleted` };
-        }
-
-        function dropTable(query) {
-            const match = query.match(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)/i);
-            if (!match) throw new Error('Invalid DROP TABLE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            
-            if (!sqlTables[tableName]) {
-                if (query.toUpperCase().includes('IF EXISTS')) {
-                    return { message: `Table '${tableName}' does not exist` };
-                }
-                throw new Error(`Table '${tableName}' does not exist`);
-            }
-            
-            delete sqlTables[tableName];
-            dbDelete('sqlTables', tableName);
-            renderTables();
-            updateStats();
-            
-            return { message: `Table '${tableName}' dropped` };
-        }
-
-        function truncateTable(query) {
-            const match = query.match(/TRUNCATE\s+(?:TABLE\s+)?(\w+)/i);
-            if (!match) throw new Error('Invalid TRUNCATE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            
-            const count = sqlTables[tableName].rows.length;
-            sqlTables[tableName].rows = [];
-            dbPut('sqlTables', sqlTables[tableName]);
-            
-            return { message: `Table '${tableName}' truncated. ${count} row(s) removed.` };
-        }
-
-        function describeTable(query) {
-            const match = query.match(/(?:DESCRIBE|DESC)\s+(\w+)/i);
-            if (!match) throw new Error('Invalid DESCRIBE syntax');
-            
-            const tableName = match[1].toLowerCase();
-            if (!sqlTables[tableName]) throw new Error(`Table '${tableName}' does not exist`);
-            
-            return { 
-                rows: sqlTables[tableName].columns.map(c => ({
-                    column: c.name, type: c.type, constraints: c.constraints || ''
-                })),
-                columns: ['column', 'type', 'constraints']
-            };
-        }
-
-        function showTables() {
-            const tables = Object.keys(sqlTables).map(name => ({
-                table_name: name,
-                rows: sqlTables[name].rows.length,
-                columns: sqlTables[name].columns.length
-            }));
-            return { rows: tables, columns: ['table_name', 'rows', 'columns'] };
-        }
-
-        function parseWhereClause(clause) {
-            const conditions = [];
-            const parts = clause.split(/\s+(AND|OR)\s+/i);
-            
-            for (let i = 0; i < parts.length; i++) {
-                const part = parts[i].trim();
-                if (part.toUpperCase() === 'AND' || part.toUpperCase() === 'OR') {
-                    conditions.push({ type: part.toUpperCase() });
-                } else {
-                    const match = part.match(/(\w+)\s*(=|!=|<>|<|>|<=|>=|LIKE|IS)\s*(.+)/i);
-                    if (match) {
-                        conditions.push({
-                            column: match[1],
-                            operator: match[2].toUpperCase(),
-                            value: match[3].replace(/^['"]|['"]$/g, '')
-                        });
-                    }
-                }
-            }
-            return conditions;
-        }
-
-        function evaluateConditions(row, conditions) {
-            let result = true;
-            let nextOp = 'AND';
-            
-            for (const cond of conditions) {
-                if (cond.type) {
-                    nextOp = cond.type;
-                } else {
-                    const evalResult = evaluateCondition(row, cond);
-                    result = nextOp === 'AND' ? result && evalResult : result || evalResult;
-                }
-            }
-            return result;
-        }
-
-        function evaluateCondition(row, condition) {
-            const { column, operator, value } = condition;
-            const rowValue = row[column];
-            
-            switch (operator) {
-                case '=': return rowValue == value;
-                case '!=': case '<>': return rowValue != value;
-                case '<': return parseFloat(rowValue) < parseFloat(value);
-                case '>': return parseFloat(rowValue) > parseFloat(value);
-                case '<=': return parseFloat(rowValue) <= parseFloat(value);
-                case '>=': return parseFloat(rowValue) >= parseFloat(value);
-                case 'LIKE': {
+function evaluateCondition(row, condition) {
+    const { column, operator, value } = condition;
+    const rowValue = row[column];
+    
+    switch (operator) {
+        case '=': return rowValue == value;
+        case '!=': case '<>': return rowValue != value;
+        case '<': return parseFloat(rowValue) < parseFloat(value);
+        case '>': return parseFloat(rowValue) > parseFloat(value);
+        case '<=': return parseFloat(rowValue) <= parseFloat(value);
+        case '>=': return parseFloat(rowValue) >= parseFloat(value);
+        case 'LIKE': {
             const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
             return new RegExp(`^${pattern}$`, 'i').test(String(rowValue));
         }
-                case 'IS': return value.toUpperCase() === 'NULL' ? rowValue == null : rowValue != null;
-                default: return false;
-            }
-        }
+        case 'IS': return value.toUpperCase() === 'NULL' ? rowValue == null : rowValue != null;
+        default: return false;
+    }
+}
 
-        function displayResults(result) {
-            const container = document.getElementById('queryResults');
-            if (!container) return;
-            
-            if (result.error) {
-                container.innerHTML = `<div class="text-red-400 p-4 bg-red-500/10 rounded-xl"><i class="fas fa-exclamation-circle mr-2"></i>${escapeHtml(result.error)}</div>`;
-                return;
-            }
-            
-            if (result.message) {
-                container.innerHTML = `<div class="text-green-400 p-4 bg-green-500/10 rounded-xl"><i class="fas fa-check-circle mr-2"></i>${escapeHtml(result.message)}</div>`;
-                return;
-            }
-            
-            if (result.rows?.length > 0) {
-                const headers = result.columns || Object.keys(result.rows[0]);
-                container.innerHTML = `
-                    <div class="overflow-auto">
-                        <table class="w-full text-sm">
-                            <thead><tr class="border-b border-white/10">${headers.map(h => `<th class="text-left p-3 text-indigo-400">${escapeHtml(h)}</th>`).join('')}</tr></thead>
-                            <tbody>${result.rows.map((row, i) => `<tr class="table-row border-b border-white/5">${headers.map(h => `<td class="p-3">${row[h] != null ? escapeHtml(String(row[h])) : '<span class="text-gray-500">NULL</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
-                        </table>
-                    </div>
-                    <p class="text-gray-400 text-sm mt-4">${result.rows.length} row(s)</p>
-                `;
-            } else {
-                container.innerHTML = '<p class="text-gray-400 text-center py-8">No results</p>';
-            }
-        }
+function displayResults(result) {
+    const container = document.getElementById('queryResults');
+    if (!container) return;
+    
+    if (result.error) {
+        container.innerHTML = `<div class="text-red-400 p-4 bg-red-500/10 rounded-xl"><i class="fas fa-exclamation-circle mr-2"></i>${escapeHtml(result.error)}</div>`;
+        return;
+    }
+    
+    if (result.message) {
+        container.innerHTML = `<div class="text-green-400 p-4 bg-green-500/10 rounded-xl"><i class="fas fa-check-circle mr-2"></i>${escapeHtml(result.message)}</div>`;
+        return;
+    }
+    
+    if (result.rows?.length > 0) {
+        const headers = result.columns || Object.keys(result.rows[0]);
+        container.innerHTML = `
+            <div class="overflow-auto">
+                <table class="w-full text-sm">
+                    <thead><tr class="border-b border-white/10">${headers.map(h => `<th class="text-left p-3 text-indigo-400">${escapeHtml(h)}</th>`).join('')}</tr></thead>
+                    <tbody>${result.rows.map(row => `<tr class="table-row border-b border-white/5">${headers.map(h => `<td class="p-3">${row[h] != null ? escapeHtml(String(row[h])) : '<span class="text-gray-500">NULL</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+                </table>
+            </div>
+            <p class="text-gray-400 text-sm mt-4">${result.rows.length} row(s)</p>
+        `;
+    } else {
+        container.innerHTML = '<p class="text-gray-400 text-center py-8">No results</p>';
+    }
+}
 
-        function renderTables() {
-            const container = document.getElementById('tablesList');
-            if (!container) return;
-            
-            const tables = Object.values(sqlTables);
-            
-            if (tables.length === 0) {
-                container.innerHTML = '<p class="text-gray-400 col-span-full text-center py-8">No tables yet</p>';
-                return;
-            }
-            
-            container.innerHTML = tables.map(table => `
-                <div class="glass rounded-xl p-4 hover:bg-white/5 transition-all">
-                    <div class="flex items-center justify-between mb-2">
-                        <h4 class="font-semibold text-indigo-400">${escapeHtml(table.name)}</h4>
-                        <span class="text-xs text-gray-400">${table.rows.length} rows</span>
-                    </div>
-                    <div class="text-xs text-gray-400 mb-3 truncate">${table.columns.map(c => c.name).join(', ')}</div>
-                    <div class="flex gap-2">
-                        <button onclick="quickQuery('SELECT * FROM ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10"><i class="fas fa-eye mr-1"></i>View</button>
-                        <button onclick="quickQuery('DROP TABLE ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-red-500/20 text-red-400"><i class="fas fa-trash mr-1"></i>Drop</button>
-                    </div>
-                </div>
-            `).join('');
-        }
+function renderTables() {
+    const container = document.getElementById('tablesList');
+    if (!container) return;
+    
+    const tables = Object.values(sqlTables);
+    
+    if (tables.length === 0) {
+        container.innerHTML = '<p class="text-gray-400 col-span-full text-center py-8">No tables yet</p>';
+        return;
+    }
+    
+    container.innerHTML = tables.map(table => `
+        <div class="glass rounded-xl p-4 hover:bg-white/5 transition-all">
+            <div class="flex items-center justify-between mb-2">
+                <h4 class="font-semibold text-indigo-400">${escapeHtml(table.name)}</h4>
+                <span class="text-xs text-gray-400">${table.rows.length} rows</span>
+            </div>
+            <div class="text-xs text-gray-400 mb-3 truncate">${table.columns.map(c => c.name).join(', ')}</div>
+            <div class="flex gap-2">
+                <button onclick="quickQuery('SELECT * FROM ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-white/10"><i class="fas fa-eye mr-1"></i>View</button>
+                <button onclick="quickQuery('DROP TABLE ${table.name}')" class="px-3 py-1 text-xs glass rounded-lg hover:bg-red-500/20 text-red-400"><i class="fas fa-trash mr-1"></i>Drop</button>
+            </div>
+        </div>
+    `).join('');
+}
 
-        function quickQuery(query) {
-            const editor = document.getElementById('sqlEditor');
-            if (editor) editor.value = query;
-            executeSQL();
-        }
+function quickQuery(query) {
+    const editor = document.getElementById('sqlEditor');
+    if (editor) editor.value = query;
+    executeSQL();
+}
 
-        function loadTemplate(type) {
-        const templates = {
-            users: `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, created_at TEXT);
+function loadTemplate(type) {
+    const templates = {
+        users: `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, created_at TEXT);
 INSERT INTO users (id, name, email, created_at) VALUES (1, 'John Doe', 'john@email.com', '2024-01-15');
 SELECT * FROM users;`,
-            products: `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER);
+        products: `CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, stock INTEGER);
 INSERT INTO products (id, name, price, stock) VALUES (1, 'Laptop', 999.99, 50);
 SELECT * FROM products;`,
-            orders: `CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, total REAL, status TEXT);
+        orders: `CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, total REAL, status TEXT);
 SELECT * FROM orders;`,
-            logs: `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, action TEXT, timestamp TEXT);
+        logs: `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, action TEXT, timestamp TEXT);
 SELECT * FROM logs;`
-        };
-            
-            const editor = document.getElementById('sqlEditor');
-            if (editor) editor.value = templates[type] || '';
-        }
+    };
+    
+    const editor = document.getElementById('sqlEditor');
+    if (editor) editor.value = templates[type] || '';
+}
 
-        function formatSQL() {
-            const editor = document.getElementById('sqlEditor');
-            if (!editor) return;
-            let sql = editor.value.replace(/\s+/g, ' ').trim();
-            sql = sql.replace(/(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ORDER BY|LIMIT)/gi, '\n$1');
-            editor.value = sql.trim();
-            updateLineNumbers();
-        }
+function formatSQL() {
+    const editor = document.getElementById('sqlEditor');
+    if (!editor) return;
+    let sql = editor.value.replace(/\s+/g, ' ').trim();
+    sql = sql.replace(/(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ORDER BY|LIMIT)/gi, '\n$1');
+    editor.value = sql.trim();
+    updateLineNumbers();
+}
 
-        function clearSQL() {
-            const editor = document.getElementById('sqlEditor');
-            if (editor) editor.value = '';
-            const results = document.getElementById('queryResults');
-            if (results) results.innerHTML = '<p class="text-gray-400 text-center py-8"><i class="fas fa-database text-4xl mb-4 block opacity-50"></i>Execute a query</p>';
-            updateLineNumbers();
-        }
+function clearSQL() {
+    const editor = document.getElementById('sqlEditor');
+    if (editor) editor.value = '';
+    const results = document.getElementById('queryResults');
+    if (results) results.innerHTML = '<p class="text-gray-400 text-center py-8"><i class="fas fa-database text-4xl mb-4 block opacity-50"></i>Execute a query</p>';
+    updateLineNumbers();
+}
 
-        function updateLineNumbers() {
-            const editor = document.getElementById('sqlEditor');
-            const lineNumbers = document.getElementById('lineNumbers');
-            if (!editor || !lineNumbers) return;
-            const lines = editor.value.split('\n').length;
-            lineNumbers.innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
-        }
+function updateLineNumbers() {
+    const editor = document.getElementById('sqlEditor');
+    const lineNumbers = document.getElementById('lineNumbers');
+    if (!editor || !lineNumbers) return;
+    const lines = editor.value.split('\n').length;
+    lineNumbers.innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('<br>');
+}
 
-        function refreshTables() {
-            loadSQLTables();
-            showToast('Refreshed', 'Tables updated', 'success');
-        }
+function refreshTables() {
+    loadSQLTables();
+    showToast('Refreshed', 'Tables updated', 'success');
+}
 
-        function showSQLHistory() {
-            if (sqlHistory.length === 0) {
-                showToast('Empty', 'No history yet', 'info');
-                return;
-            }
-            
-            const content = sqlHistory.map((h, i) => `
-                <div class="glass rounded-xl p-3 mb-2 cursor-pointer hover:bg-white/10" onclick="loadHistoryQuery(${i})">
-                    <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query.substring(0, 200))}</pre>
-                    <p class="text-xs text-gray-400 mt-1">${formatRelativeTime(h.timestamp)}</p>
-                </div>
-            `).join('');
-            
-            showModal('Query History', content);
-        }
+function showSQLHistory() {
+    if (sqlHistory.length === 0) {
+        showToast('Empty', 'No history yet', 'info');
+        return;
+    }
+    
+    const content = sqlHistory.map((h, i) => `
+        <div class="glass rounded-xl p-3 mb-2 cursor-pointer hover:bg-white/10" onclick="loadHistoryQuery(${i})">
+            <pre class="text-green-400 text-xs truncate">${escapeHtml(h.query.substring(0, 200))}</pre>
+            <p class="text-xs text-gray-400 mt-1">${formatRelativeTime(h.timestamp)}</p>
+        </div>
+    `).join('');
+    
+    showModal('Query History', content);
+}
 
-        function loadHistoryQuery(index) {
-            const editor = document.getElementById('sqlEditor');
-            if (editor) editor.value = sqlHistory[index].query;
-            closeModal();
-            updateLineNumbers();
-        }
+function loadHistoryQuery(index) {
+    const editor = document.getElementById('sqlEditor');
+    if (editor) editor.value = sqlHistory[index].query;
+    closeModal();
+    updateLineNumbers();
+}
 
-        function exportResults() {
+function exportResults() {
     try {
         const table = document.querySelector('#queryResults table');
         if (!table) {
@@ -3281,7 +3209,7 @@ SELECT * FROM logs;`
             return;
         }
         
-        let csv = '\uFEFF'; // BOM for Excel UTF-8 compatibility
+        let csv = '\uFEFF';
         table.querySelectorAll('tr').forEach(row => {
             const cells = row.querySelectorAll('th, td');
             csv += Array.from(cells).map(c => `"${(c.textContent || '').replace(/"/g, '""')}"`).join(',') + '\n';
@@ -3294,12 +3222,9 @@ SELECT * FROM logs;`
         a.download = `query-results-${Date.now()}.csv`;
         a.style.display = 'none';
         document.body.appendChild(a);
-        
-        setTimeout(() => {
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }, 100);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
         
         showToast('Exported', 'CSV downloaded', 'success');
     } catch (error) {
@@ -3308,176 +3233,121 @@ SELECT * FROM logs;`
     }
 }
 
-        function explainSQL() {
-            showToast('SQL', 'This query retrieves or modifies data', 'info');
-        }
+function explainSQL() {
+    showToast('SQL', 'This query retrieves or modifies data', 'info');
+}
 
-        function cancelAllUploads() {
-            const queue = document.getElementById('uploadQueue');
-            const list = document.getElementById('uploadList');
-            if (queue) queue.classList.add('hidden');
-            if (list) list.innerHTML = '';
-        }
+function cancelAllUploads() {
+    const queue = document.getElementById('uploadQueue');
+    const list = document.getElementById('uploadList');
+    if (queue) queue.classList.add('hidden');
+    if (list) list.innerHTML = '';
+}
 
-        // ==================== ANALYTICS ====================
-        async function updateStats() {
+// ==================== ANALYTICS ====================
+async function updateStats() {
     try {
         const files = await dbGetAll('files');
+        const tables = await dbGetAll('sqlTables');
+        
         const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+        const totalRecords = tables.reduce((sum, t) => sum + (t.rows?.length || 0), 0);
         const maxStorage = CONFIG.MAX_STORAGE[currentProvider] || CONFIG.MAX_STORAGE.local;
-        const percent = Math.min((totalSize / maxStorage) * 100, 100);
+        const usedPercent = Math.min((totalSize / maxStorage) * 100, 100);
         
-        // Update displays
-        document.getElementById('totalFiles').textContent = files.length;
-        document.getElementById('totalSize').textContent = formatBytes(totalSize);
-        document.getElementById('storagePercent').textContent = `${percent.toFixed(1)}%`;
-        document.getElementById('storageBar').style.width = `${percent}%`;
-        document.getElementById('storageText').textContent = `${formatBytes(totalSize)} of ${formatBytes(maxStorage)}`;
-        document.getElementById('maxStorageDisplay').textContent = formatBytes(maxStorage);
+        // Update elements safely
+        const updates = {
+            'totalFiles': files.length,
+            'totalSize': formatBytes(totalSize),
+            'totalRecords': totalRecords,
+            'storagePercent': usedPercent.toFixed(1) + '%',
+            'storageText': `${formatBytes(totalSize)} of ${formatBytes(maxStorage)}`,
+            'maxStorageDisplay': formatBytes(maxStorage),
+            'ringPercent': usedPercent.toFixed(1) + '%'
+        };
         
-        // Analytics ring
+        Object.entries(updates).forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        });
+        
+        const storageBar = document.getElementById('storageBar');
+        if (storageBar) storageBar.style.width = usedPercent + '%';
+        
         const ring = document.getElementById('storageRing');
         if (ring) {
-            const circumference = 251.2;
-            ring.style.strokeDashoffset = circumference - (percent / 100 * circumference);
+            const offset = 251.2 - (251.2 * usedPercent / 100);
+            ring.style.strokeDashoffset = offset;
         }
-        document.getElementById('ringPercent').textContent = `${percent.toFixed(1)}%`;
         
-        // SQL records
-        const tables = Object.values(sqlTables);
-        const totalRecords = tables.reduce((sum, t) => sum + (t.rows?.length || 0), 0);
-        document.getElementById('totalRecords').textContent = totalRecords;
-        
-        // Storage breakdown
-        renderStorageBreakdown(files);
-        renderFileTypesChart(files);
-        
+        updateFileTypesChart(files);
+        updateStorageBreakdown(files);
     } catch (e) {
         console.warn('Stats update error:', e);
     }
 }
 
-function renderStorageBreakdown(files) {
-    const container = document.getElementById('storageBreakdown');
-    if (!container) return;
-    
-    const types = {};
-    files.forEach(f => {
-        const category = getFileCategory(f.type);
-        types[category] = (types[category] || 0) + (f.size || 0);
-    });
-    
-    const colors = {
-        'Images': 'from-pink-500 to-rose-500',
-        'Videos': 'from-purple-500 to-indigo-500',
-        'Audio': 'from-green-500 to-emerald-500',
-        'Documents': 'from-blue-500 to-cyan-500',
-        'Other': 'from-gray-500 to-gray-600'
-    };
-    
-    container.innerHTML = Object.entries(types)
-        .sort((a, b) => b[1] - a[1])
-        .map(([type, size]) => `
-            <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                    <div class="w-3 h-3 rounded-full bg-gradient-to-r ${colors[type] || colors.Other}"></div>
-                    <span class="text-sm">${type}</span>
-                </div>
-                <span class="text-sm text-gray-400">${formatBytes(size)}</span>
-            </div>
-        `).join('');
+function getFileCategory(type) {
+    if (!type) return 'Other';
+    if (type === 'folder') return 'Folders';
+    if (type.startsWith('image/')) return 'Images';
+    if (type.startsWith('video/')) return 'Videos';
+    if (type.startsWith('audio/')) return 'Audio';
+    return 'Documents';
 }
 
-function renderFileTypesChart(files) {
-    const container = document.getElementById('fileTypesChart');
-    if (!container) return;
-    
+function updateFileTypesChart(files) {
     const types = {};
     files.forEach(f => {
         const category = getFileCategory(f.type);
         types[category] = (types[category] || 0) + 1;
     });
     
-    const total = files.length || 1;
-    const colors = ['bg-indigo-500', 'bg-purple-500', 'bg-pink-500', 'bg-green-500', 'bg-orange-500'];
+    const container = document.getElementById('fileTypesChart');
+    if (!container) return;
     
-    container.innerHTML = Object.entries(types)
-        .sort((a, b) => b[1] - a[1])
-        .map(([type, count], i) => `
-            <div>
-                <div class="flex justify-between text-sm mb-1">
-                    <span>${type}</span>
-                    <span class="text-gray-400">${count} files</span>
-                </div>
-                <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                    <div class="${colors[i % colors.length]} h-full rounded-full transition-all duration-500" style="width: ${(count / total * 100)}%"></div>
-                </div>
+    const total = files.length || 1;
+    
+    if (Object.keys(types).length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center">No files</p>';
+        return;
+    }
+    
+    container.innerHTML = Object.entries(types).map(([type, count]) => `
+        <div>
+            <div class="flex justify-between text-sm mb-1">
+                <span>${type}</span>
+                <span class="text-gray-400">${count} (${(count/total*100).toFixed(0)}%)</span>
             </div>
-        `).join('');
+            <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+                <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full" style="width: ${(count/total*100)}%"></div>
+            </div>
+        </div>
+    `).join('');
 }
 
-function getFileCategory(type) {
-    if (!type) return 'Other';
-    if (type.startsWith('image/')) return 'Images';
-    if (type.startsWith('video/')) return 'Videos';
-    if (type.startsWith('audio/')) return 'Audio';
-    if (type.includes('pdf') || type.includes('document') || type.includes('text')) return 'Documents';
-    return 'Other';
+function updateStorageBreakdown(files) {
+    const breakdown = {};
+    files.forEach(f => {
+        const category = getFileCategory(f.type);
+        breakdown[category] = (breakdown[category] || 0) + (f.size || 0);
+    });
+    
+    const container = document.getElementById('storageBreakdown');
+    if (!container) return;
+    
+    if (Object.keys(breakdown).length === 0) {
+        container.innerHTML = '<p class="text-gray-400 text-center text-sm">No data</p>';
+        return;
+    }
+    
+    container.innerHTML = Object.entries(breakdown).sort((a, b) => b[1] - a[1]).map(([type, size]) => `
+        <div class="flex items-center justify-between">
+            <span>${type}</span>
+            <span class="text-gray-400">${formatBytes(size)}</span>
+        </div>
+    `).join('');
 }
-
-        function updateFileTypesChart(files) {
-            const types = {};
-            files.forEach(f => {
-                const category = getFileCategory(f.type);
-                types[category] = (types[category] || 0) + 1;
-            });
-            
-            const container = document.getElementById('fileTypesChart');
-            if (!container) return;
-            
-            const total = files.length || 1;
-            
-            if (Object.keys(types).length === 0) {
-                container.innerHTML = '<p class="text-gray-400 text-center">No files</p>';
-                return;
-            }
-            
-            container.innerHTML = Object.entries(types).map(([type, count]) => `
-                <div>
-                    <div class="flex justify-between text-sm mb-1">
-                        <span>${type}</span>
-                        <span class="text-gray-400">${count} (${(count/total*100).toFixed(0)}%)</span>
-                    </div>
-                    <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                        <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full" style="width: ${(count/total*100)}%"></div>
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        function updateStorageBreakdown(files) {
-            const breakdown = {};
-            files.forEach(f => {
-                const category = getFileCategory(f.type);
-                breakdown[category] = (breakdown[category] || 0) + (f.size || 0);
-            });
-            
-            const container = document.getElementById('storageBreakdown');
-            if (!container) return;
-            
-            if (Object.keys(breakdown).length === 0) {
-                container.innerHTML = '<p class="text-gray-400 text-center text-sm">No data</p>';
-                return;
-            }
-            
-            container.innerHTML = Object.entries(breakdown).sort((a, b) => b[1] - a[1]).map(([type, size]) => `
-                <div class="flex items-center justify-between">
-                    <span>${type}</span>
-                    <span class="text-gray-400">${formatBytes(size)}</span>
-                </div>
-            `).join('');
-        }
-
         // ==================== ACTIVITY ====================
         async function logActivity(action, message) {
             try {
