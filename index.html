@@ -915,15 +915,28 @@
         // ==================== INITIALIZATION ====================
         // ==================== INITIALIZATION ====================
         async function init() {
-            console.log('🚀 Starting NexusCloud Pro initialization...');
-            
-            // 1. Initialize UI immediately (don't wait for DB)
-            try {
-                initParticles();
-                initEventListeners();
-                updateOnlineStatus();
-                window.addEventListener('online', updateOnlineStatus);
-                window.addEventListener('offline', updateOnlineStatus);
+    try {
+        await initDB();
+        initSupabase();
+        await loadFiles();
+        await loadSQLTables();
+        await updateStats();
+        await loadActivityLog();
+        updateOnlineStatus();
+        initEventListeners();
+        initParticles();
+        
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+        
+        // Hide loading screen
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        if (loadingOverlay) {
+            loadingOverlay.style.opacity = '0';
+            setTimeout(() => {
+                loadingOverlay.style.display = 'none';
+            }, 500);
+        }
             } catch (e) { console.error('UI Init Error', e); }
 
             // 2. Load Data Safely
@@ -1072,7 +1085,7 @@
                 const settings = await loadAllSettings();
                 
                 // Load cloud credentials
-                const supabaseUrl = document.getElementById('supabaseUrl');
+                Url = document.getElementById('supabaseUrl');
                 const supabaseKey = document.getElementById('supabaseKey');
                 const githubToken = document.getElementById('githubToken');
                 const githubRepo = document.getElementById('githubRepo');
