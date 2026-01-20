@@ -1455,10 +1455,13 @@ async function syncFromCloud() {
                                 <i class="fas ${getFileIcon(file.type)} text-xl lg:text-2xl"></i>
                             </div>
                             <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
-                                    <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
-                                </button>
-                            </div>
+    <button onclick="event.stopPropagation(); downloadFile(${file.id})" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
+        <i class="fas fa-download text-indigo-400"></i>
+    </button>
+    <button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
+        <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
+    </button>
+</div>
                         </div>
                         <h4 class="font-semibold truncate text-sm mb-1">${escapeHtml(file.name)}</h4>
                         <p class="text-xs text-gray-400">${formatBytes(file.size || 0)}</p>
@@ -1482,10 +1485,13 @@ async function syncFromCloud() {
                             <p class="font-medium truncate">${escapeHtml(file.name)}</p>
                             <p class="text-xs text-gray-400">${formatBytes(file.size || 0)} • ${formatDate(file.created)}</p>
                         </div>
-                        <button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
-                            <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
-                        </button>
-                        ${file.synced ? '<i class="fas fa-cloud text-green-400"></i>' : '<i class="fas fa-hdd text-gray-500"></i>'}
+                        <button onclick="event.stopPropagation(); downloadFile(${file.id})" class="p-2 hover:bg-white/10 rounded-lg" title="Download">
+    <i class="fas fa-download text-indigo-400"></i>
+</button>
+<button onclick="event.stopPropagation(); toggleStar(${file.id})" class="p-2 hover:bg-white/10 rounded-lg">
+    <i class="fas fa-star ${file.starred ? 'text-yellow-400' : 'text-gray-500'}"></i>
+</button>
+${file.synced ? '<i class="fas fa-cloud text-green-400"></i>' : '<i class="fas fa-hdd text-gray-500"></i>'}
                     </div>
                 `).join('');
             }
@@ -1672,12 +1678,12 @@ async function syncFromCloud() {
             const fileData = await readFileAsDataURL(file, uploadItem);
             
             const fileRecord = {
-                id: fileId,
-                name: file.name,
-                type: file.type || 'application/octet-stream',
-                size: file.size,
-                data: synced ? null : fileData, // Don't store blob locally if synced
-                cloudUrl: cloudUrl,
+    id: fileId,
+    name: file.name,
+    type: file.type || 'application/octet-stream',
+    size: file.size,
+    data: fileData, // Always store local backup for downloads
+    cloudUrl: cloudUrl,
                 cloudPath: synced ? `${currentFolder || 'root'}/${fileId}_${file.name}` : null,
                 folder: currentFolder,
                 created: new Date().toISOString(),
@@ -1768,64 +1774,100 @@ async function syncFromCloud() {
     
     let downloadUrl = null;
     let shouldRevokeUrl = false;
+    let blob = null;
     
     try {
-        // Try cloud URL first
-        if (file.cloudUrl && isOnline) {
-            downloadUrl = file.cloudUrl;
-        } else if (file.cloudPath && supabaseClient && isOnline) {
-            // Generate signed URL for private files
-            const { data, error } = await supabaseClient.storage
-                .from(CONFIG.STORAGE_BUCKET)
-                .createSignedUrl(file.cloudPath, 300);
-            
-            if (!error && data?.signedUrl) {
-                downloadUrl = data.signedUrl;
+        // Method 1: Use local data if available (fastest)
+        if (file.data && file.data.startsWith('data:')) {
+            try {
+                const response = await fetch(file.data);
+                blob = await response.blob();
+                downloadUrl = URL.createObjectURL(blob);
+                shouldRevokeUrl = true;
+                console.log('Using local data for download');
+            } catch (e) {
+                console.warn('Local data fetch failed:', e);
             }
         }
         
-        // Fallback to local data
-        if (!downloadUrl && file.data) {
-            // Convert data URL to blob for better download handling
-            if (file.data.startsWith('data:')) {
-                const response = await fetch(file.data);
-                const blob = await response.blob();
-                downloadUrl = URL.createObjectURL(blob);
-                shouldRevokeUrl = true;
-            } else {
-                downloadUrl = file.data;
+        // Method 2: Try cloud URL
+        if (!downloadUrl && file.cloudUrl && isOnline) {
+            try {
+                // Verify URL is accessible
+                const testResponse = await fetch(file.cloudUrl, { method: 'HEAD' });
+                if (testResponse.ok) {
+                    downloadUrl = file.cloudUrl;
+                    console.log('Using cloud URL for download');
+                }
+            } catch (e) {
+                console.warn('Cloud URL not accessible:', e);
+            }
+        }
+        
+        // Method 3: Generate signed URL from Supabase
+        if (!downloadUrl && file.cloudPath && supabaseClient && isOnline) {
+            try {
+                const { data, error } = await supabaseClient.storage
+                    .from(CONFIG.STORAGE_BUCKET)
+                    .createSignedUrl(file.cloudPath, 300);
+                
+                if (!error && data?.signedUrl) {
+                    downloadUrl = data.signedUrl;
+                    console.log('Using signed URL for download');
+                }
+            } catch (e) {
+                console.warn('Signed URL generation failed:', e);
+            }
+        }
+        
+        // Method 4: Download directly from Supabase storage
+        if (!downloadUrl && file.cloudPath && supabaseClient && isOnline) {
+            try {
+                const { data, error } = await supabaseClient.storage
+                    .from(CONFIG.STORAGE_BUCKET)
+                    .download(file.cloudPath);
+                
+                if (!error && data) {
+                    blob = data;
+                    downloadUrl = URL.createObjectURL(blob);
+                    shouldRevokeUrl = true;
+                    console.log('Downloaded blob from Supabase');
+                }
+            } catch (e) {
+                console.warn('Direct Supabase download failed:', e);
             }
         }
         
         if (!downloadUrl) {
-            showToast('Error', 'File data not available. Try syncing first.', 'error');
+            showToast('Error', 'File data not available. The file may need to be re-uploaded.', 'error');
             return;
         }
         
-        // Create and trigger download
+        // Create download link
         const a = document.createElement('a');
         a.href = downloadUrl;
         a.download = file.name || 'download';
         a.style.display = 'none';
+        a.target = '_blank'; // Helps with some browsers
         document.body.appendChild(a);
         
-        // Use setTimeout to ensure the click registers
+        // Trigger download
+        a.click();
+        
+        // Cleanup
         setTimeout(() => {
-            a.click();
             document.body.removeChild(a);
-            
-            // Clean up blob URL after download starts
-            if (shouldRevokeUrl) {
-                setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+            if (shouldRevokeUrl && downloadUrl) {
+                URL.revokeObjectURL(downloadUrl);
             }
-        }, 100);
+        }, 1000);
         
         await logActivity('download', `Downloaded ${file.name}`);
-        showToast('Download', 'Download started', 'success');
+        showToast('Success', `${file.name} download started`, 'success');
         
     } catch (error) {
         console.error('Download error:', error);
-        showToast('Error', 'Download failed: ' + error.message, 'error');
+        showToast('Error', 'Download failed: ' + (error.message || 'Unknown error'), 'error');
     }
 }
 
